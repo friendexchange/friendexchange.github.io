@@ -2558,6 +2558,7 @@
     title,
     time,
     detail,
+    detailLabel = null,
     resultLabel = null,
     sourceUrl = null,
   }) {
@@ -2568,7 +2569,7 @@
           <strong>${escapeHtml(title)}</strong>
           <span class="market-timeline-time">${escapeHtml(time)}</span>
           ${resultLabel ? `<p class="market-timeline-result">Winner: <strong>${escapeHtml(resultLabel)}</strong>.</p>` : ""}
-          ${detail ? `<p>${escapeHtml(detail)}</p>` : ""}
+          ${detail ? `<p>${detailLabel ? `${escapeHtml(detailLabel)} ` : ""}${escapeHtml(detail)}</p>` : ""}
           ${sourceUrl ? `
             <a
               class="market-timeline-source"
@@ -2576,7 +2577,7 @@
               target="_blank"
               rel="noopener noreferrer"
             >
-              View result source
+              <span class="market-timeline-source-label">View result source</span>
               <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i>
             </a>
           ` : ""}
@@ -2709,6 +2710,7 @@
           title: "Result & payout",
           time: `${resolvedAt}${resolverSuffix}`,
           detail: resolutionDetail,
+          detailLabel: "Resolution note:",
           resultLabel: winnerLabel,
           sourceUrl: market.resolution_source_url,
         },
@@ -3887,6 +3889,52 @@
     `;
   }
 
+  function formatMarketHeroDate(value) {
+    if (!value) return null;
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return null;
+    return new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric",
+      year: date.getFullYear() !== new Date().getFullYear() ? "numeric" : undefined,
+    }).format(date);
+  }
+
+  function getMarketHeroMeta(market) {
+    const points = formatNumber(market.actualTotal);
+
+    if (market.status === "void") {
+      return {
+        stateLabel: market.archived_at ? "Voided · archived" : "Voided",
+        pointsLabel: `${points} points refunded`,
+      };
+    }
+
+    if (market.displayStatus === "resolved") {
+      const resolvedDate = formatMarketHeroDate(market.resolved_at);
+      return {
+        stateLabel: resolvedDate ? `Resolved ${resolvedDate}` : "Resolved",
+        pointsLabel: `Final pool · ${points} points`,
+      };
+    }
+
+    if (market.displayStatus === "closed") {
+      return {
+        stateLabel: "Awaiting result",
+        pointsLabel: `${points} points in pool`,
+      };
+    }
+
+    return {
+      stateLabel: market.closeMode === "outcome"
+        ? "Open until outcome"
+        : market.closes_at
+          ? `Closes ${formatDateTime(market.closes_at)}`
+          : "Close time not recorded",
+      pointsLabel: `${points} points in pool`,
+    };
+  }
+
   function renderMarketDetail(marketId) {
     const market = getAllMarkets().find((item) => item.id === marketId);
     if (!market) {
@@ -3932,6 +3980,7 @@
     const selectedOutcomeId = selectedOutcome?.id || null;
     const userPredictions = market.officialPredictions.filter((prediction) => prediction.user_id === state.user.id);
     const userCommitted = userPredictions.reduce((sum, prediction) => sum + prediction.amount, 0);
+    const heroMeta = getMarketHeroMeta(market);
     const sortedOutcomes = [...market.outcomes].sort((a, b) => b.percent - a.percent);
     const marketActivity = buildMarketActivityView(market, state.marketActivityView);
     const oddsTimeline = buildMarketOddsTimeline(market);
@@ -3965,9 +4014,8 @@
             ${market.description ? `<p class="market-description">${escapeHtml(market.description)}</p>` : ""}
             <div class="market-meta-row">
               <span class="tiny-pill">Created by ${escapeHtml(market.creator?.display_name || "Unknown")}</span>
-              <span class="tiny-pill">${market.closeMode === "outcome" ? "Open until outcome" : `Closes ${formatDateTime(market.closes_at)}`}</span>
-              <span class="tiny-pill">${formatNumber(market.actualTotal)} points in pool</span>
-              ${market.archived_at ? `<span class="tiny-pill">Archived ${formatDateTime(market.archived_at)}</span>` : ""}
+              <span class="tiny-pill">${escapeHtml(heroMeta.stateLabel)}</span>
+              <span class="tiny-pill">${escapeHtml(heroMeta.pointsLabel)}</span>
             </div>
           </section>
 
