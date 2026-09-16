@@ -6098,7 +6098,8 @@ a.exchange-activity-item:focus-visible {
     max-height: 92vh;
     max-height: min(
       92dvh,
-      calc(100dvh - env(safe-area-inset-top) - 12px)
+      calc(100dvh - env(safe-area-inset-top) - 12px),
+      calc(var(--modal-visual-height, 100dvh) - 12px)
     );
     display: flex;
     overflow: hidden;

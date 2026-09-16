@@ -7013,10 +7013,13 @@
     });
 
     updateEstimate();
-    if (initialOutcome) {
-      input.focus();
-    } else {
-      outcomeSelect.focus();
+    // Keep the full sheet visible until the trader chooses to open the phone keyboard.
+    if (!window.matchMedia?.("(max-width: 720px)")?.matches) {
+      if (initialOutcome) {
+        input.focus();
+      } else {
+        outcomeSelect.focus();
+      }
     }
 
     document.querySelector("#prediction-form").addEventListener("submit", async (event) => {
@@ -7940,7 +7943,11 @@
     });
   }
 
+  let stopTrackingModalViewport = null;
+
   function openModal(content, modalClass = "") {
+    stopTrackingModalViewport?.();
+    stopTrackingModalViewport = null;
     state.modalReturnFocusElement = document.activeElement || null;
     dom.modalRoot.innerHTML = `
       <div class="modal-backdrop" role="presentation">
@@ -7950,6 +7957,37 @@
       </div>
     `;
     document.body.classList.add("modal-open");
+    const viewport = window.visualViewport;
+    const backdrop = dom.modalRoot.querySelector(".modal-backdrop");
+    if (viewport && backdrop) {
+      const syncViewport = () => {
+        const isMobile = window.matchMedia?.("(max-width: 720px)")?.matches;
+        if (!isMobile) {
+          backdrop.style.cssText = "";
+          return;
+        }
+
+        // Safari's keyboard can shrink and pan the visible viewport without
+        // moving fixed elements. Keep the sheet and its actions above it.
+        backdrop.style.top = `${viewport.offsetTop}px`;
+        backdrop.style.left = `${viewport.offsetLeft}px`;
+        backdrop.style.right = "auto";
+        backdrop.style.bottom = "auto";
+        backdrop.style.width = `${viewport.width}px`;
+        backdrop.style.height = `${viewport.height}px`;
+        backdrop.style.setProperty("--modal-visual-height", `${viewport.height}px`);
+      };
+
+      viewport.addEventListener("resize", syncViewport);
+      viewport.addEventListener("scroll", syncViewport);
+      window.addEventListener("resize", syncViewport);
+      stopTrackingModalViewport = () => {
+        viewport.removeEventListener("resize", syncViewport);
+        viewport.removeEventListener("scroll", syncViewport);
+        window.removeEventListener("resize", syncViewport);
+      };
+      syncViewport();
+    }
     window.setTimeout(() => dom.modalRoot.querySelector(".modal-close")?.focus(), 0);
   }
 
@@ -7961,6 +7999,8 @@
     state.allowanceNoticeOpen = false;
     state.allowanceNoticeCurrent = null;
     state.modalReturnFocusElement = null;
+    stopTrackingModalViewport?.();
+    stopTrackingModalViewport = null;
     dom.modalRoot.innerHTML = "";
     document.body.classList.remove("modal-open");
 
