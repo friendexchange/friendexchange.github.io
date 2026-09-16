@@ -2703,7 +2703,6 @@
           title: "Prediction cutoff",
           time: formatTimelineMoment(cutoffAt, "Prediction cutoff time not recorded"),
           detail: cutoffDetail,
-          sourceUrl: market.resolution_source_url,
         },
         {
           state: "complete",
@@ -2711,6 +2710,7 @@
           time: `${resolvedAt}${resolverSuffix}`,
           detail: resolutionDetail,
           resultLabel: winnerLabel,
+          sourceUrl: market.resolution_source_url,
         },
       ];
       summary = getResolvedSettlementSummary(market);
@@ -2779,6 +2779,110 @@
           ${steps.map(renderMarketTimelineStep).join("")}
         </ol>
         <p class="market-timeline-summary${summaryClass}">${escapeHtml(summary)}</p>
+      </section>
+    `;
+  }
+
+  function renderMarketFinalPayouts(market, currentUserId) {
+    if (market.displayStatus !== "resolved" || market.predictions.length === 0) return "";
+
+    const profileById = new Map(state.profiles.map((profile) => [profile.id, profile]));
+    const rowsByUser = new Map();
+    market.predictions.forEach((prediction) => {
+      if (!rowsByUser.has(prediction.user_id)) {
+        rowsByUser.set(prediction.user_id, {
+          userId: prediction.user_id,
+          name: profileById.get(prediction.user_id)?.display_name || "Unknown trader",
+          committed: 0,
+          returned: 0,
+          lateRefund: 0,
+        });
+      }
+    });
+
+    market.officialPredictions.forEach((prediction) => {
+      rowsByUser.get(prediction.user_id).committed += Number(prediction.amount || 0);
+    });
+    state.payouts.forEach((payout) => {
+      if (payout.market_id !== market.id) return;
+      const row = rowsByUser.get(payout.user_id);
+      if (!row) return;
+      if (payout.kind === "late_refund") {
+        row.lateRefund += Number(payout.amount || 0);
+      } else if (payout.kind !== "void_refund") {
+        row.returned += Number(payout.amount || 0);
+      }
+    });
+
+    const rows = [...rowsByUser.values()]
+      .map((row) => ({ ...row, profitLoss: row.returned - row.committed }))
+      .sort((a, b) =>
+        b.profitLoss - a.profitLoss ||
+        b.committed - a.committed ||
+        a.name.localeCompare(b.name) ||
+        String(a.userId).localeCompare(String(b.userId)),
+      );
+    const hasLateRefunds = rows.some((row) => row.lateRefund > 0);
+
+    return `
+      <section class="panel market-payout-panel" aria-labelledby="market-payout-heading">
+        <div class="panel-heading">
+          <div>
+            <h2 id="market-payout-heading">Final payouts</h2>
+            <p>The receipts are in. Here’s how everyone came out.${hasLateRefunds
+              ? " These totals cover predictions that counted; after-cutoff refunds appear under affected traders."
+              : ""}</p>
+          </div>
+        </div>
+        <div class="market-payout-table-wrap">
+          <table class="data-table market-payout-table">
+            <thead>
+              <tr>
+                <th scope="col">Trader</th>
+                <th scope="col">Committed</th>
+                <th scope="col">Returned</th>
+                <th scope="col" aria-sort="descending">Profit / loss</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map((row) => {
+                const profitLossClass = row.profitLoss > 0
+                  ? "text-success"
+                  : row.profitLoss < 0
+                    ? "text-danger"
+                    : "";
+                return `
+                  <tr class="${row.userId === currentUserId ? "is-current-user" : ""}">
+                    <td class="market-payout-trader-cell">
+                      <div class="market-payout-identity">
+                        ${renderProfileAvatar(profileById.get(row.userId) || { display_name: row.name })}
+                        <div class="market-payout-trader-copy">
+                          <span class="market-payout-name-line">
+                            <strong>${escapeHtml(row.name)}</strong>
+                            ${row.userId === currentUserId ? '<span class="market-payout-you">You</span>' : ""}
+                          </span>
+                          ${row.lateRefund > 0 ? `<small class="market-payout-note">${formatNumber(row.lateRefund)} pts refunded after cutoff</small>` : ""}
+                        </div>
+                      </div>
+                    </td>
+                    <td class="mono">
+                      <span class="mobile-cell-label">Committed</span>
+                      <span class="mobile-cell-value">${formatNumber(row.committed)} pts</span>
+                    </td>
+                    <td class="mono">
+                      <span class="mobile-cell-label">Returned</span>
+                      <span class="mobile-cell-value">${formatNumber(row.returned)} pts</span>
+                    </td>
+                    <td class="mono ${profitLossClass}">
+                      <span class="mobile-cell-label">Profit / loss</span>
+                      <span class="mobile-cell-value">${row.profitLoss > 0 ? "+" : ""}${formatNumber(row.profitLoss)} pts</span>
+                    </td>
+                  </tr>
+                `;
+              }).join("")}
+            </tbody>
+          </table>
+        </div>
       </section>
     `;
   }
@@ -3921,6 +4025,8 @@
           </section>
 
           ${renderMarketTimeline(market)}
+
+          ${renderMarketFinalPayouts(market, state.user.id)}
 
           ${renderLivePosition(market, state.user.id)}
 
