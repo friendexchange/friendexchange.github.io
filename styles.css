@@ -3239,6 +3239,348 @@ a.exchange-activity-item:focus-visible {
   color: #a73931;
 }
 
+.admin-row-action:is(a) {
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.admin-market-toolbar {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.65fr) minmax(0, 1.85fr);
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.admin-market-search {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  min-height: 46px;
+  padding: 0 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--paper-strong);
+  color: var(--muted);
+}
+
+.admin-market-search:focus-within {
+  border-color: var(--ink);
+  box-shadow: 0 0 0 3px rgba(170, 255, 92, 0.28);
+  color: var(--ink);
+}
+
+.admin-market-search input {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 0.78rem;
+}
+
+.admin-market-filter-row {
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  margin-bottom: 0;
+}
+
+.admin-market-filter-row .filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding-right: 10px;
+  padding-left: 10px;
+  font-size: 0.72rem;
+}
+
+.admin-market-filter-row .filter-chip span {
+  min-width: 18px;
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: rgba(16, 27, 24, 0.08);
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: 0.56rem;
+  font-weight: 500;
+}
+
+.admin-market-filter-row .filter-chip.active span {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.admin-market-card {
+  margin-bottom: 20px;
+}
+
+.admin-market-result-count {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+}
+
+.admin-markets-table {
+  min-width: 1600px;
+}
+
+.admin-markets-table th:first-child,
+.admin-markets-table td.admin-market-question-cell {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  width: 350px;
+  min-width: 350px;
+  max-width: 350px;
+  background: var(--paper-strong);
+  box-shadow: 10px 0 16px -18px rgba(16, 27, 24, 0.75);
+}
+
+.admin-markets-table th:first-child {
+  z-index: 4;
+  background: #eeece3;
+}
+
+.admin-markets-table th:last-child,
+.admin-markets-table td.admin-person-actions-cell {
+  position: sticky;
+  right: 0;
+  z-index: 3;
+  width: 84px;
+  min-width: 84px;
+  background: var(--paper-strong);
+  box-shadow: -10px 0 16px -18px rgba(16, 27, 24, 0.75);
+}
+
+.admin-markets-table th:last-child {
+  z-index: 4;
+  background: #eeece3;
+}
+
+.admin-markets-table td.admin-person-actions-cell:has(.admin-row-menu[open]) {
+  z-index: 12;
+}
+
+.admin-market-row.needs-attention td {
+  background: #fff8ed;
+}
+
+.admin-market-row.needs-attention .admin-market-question-cell {
+  box-shadow: inset 3px 0 0 var(--coral), 10px 0 16px -18px rgba(16, 27, 24, 0.75);
+}
+
+.admin-market-question {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  white-space: normal;
+}
+
+.admin-market-question > div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.admin-market-question a {
+  color: var(--ink);
+  font-weight: 800;
+  line-height: 1.35;
+  text-decoration: none;
+}
+
+.admin-market-question a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.admin-market-question small,
+.admin-market-status-cell small,
+.admin-market-points-cell small,
+.admin-market-participation-cell small,
+.admin-market-date small,
+.admin-market-result small {
+  display: block;
+  color: var(--muted);
+  font-size: 0.64rem;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.admin-market-expand {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  flex: 0 0 28px;
+  place-items: center;
+  margin-top: -3px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.admin-market-expand:hover,
+.admin-market-expand:focus-visible {
+  border-color: var(--line-strong);
+  background: rgba(16, 27, 24, 0.07);
+  color: var(--ink);
+}
+
+.admin-market-expand:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+.admin-market-status-cell {
+  min-width: 160px;
+}
+
+.admin-market-status-cell .status-pill {
+  margin-bottom: 6px;
+}
+
+.admin-market-status-cell small.is-attention,
+.admin-market-date small.is-attention {
+  color: #a73931;
+  font-weight: 800;
+}
+
+.admin-market-points-cell {
+  min-width: 112px;
+  text-align: right !important;
+}
+
+.admin-market-points-cell > strong,
+.admin-market-participation-cell > strong,
+.admin-market-date > strong,
+.admin-market-result > strong {
+  display: block;
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.admin-market-participation-cell {
+  min-width: 130px;
+}
+
+.admin-market-date,
+.admin-market-result {
+  display: block;
+  min-width: 155px;
+  white-space: normal;
+}
+
+.admin-market-empty-value {
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+
+.admin-market-detail-row > td {
+  padding: 0;
+  background: #f5f3eb;
+  white-space: normal;
+}
+
+.admin-market-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 1.1fr) minmax(260px, 1fr) minmax(260px, 0.9fr);
+  gap: 0;
+}
+
+.admin-market-detail-section {
+  min-width: 0;
+  padding: 22px 24px;
+  border-right: 1px solid var(--line);
+}
+
+.admin-market-detail-section:last-child {
+  border-right: 0;
+}
+
+.admin-market-detail-section .eyebrow {
+  margin: 0 0 10px;
+}
+
+.admin-market-detail-section > p:not(.eyebrow) {
+  margin: 7px 0;
+  color: var(--muted);
+  font-size: 0.73rem;
+  line-height: 1.55;
+}
+
+.admin-market-detail-section > small {
+  display: block;
+  margin: 7px 0;
+  color: var(--muted);
+  font-size: 0.66rem;
+}
+
+.admin-market-detail-section dl {
+  display: grid;
+  gap: 7px;
+  margin: 14px 0 0;
+}
+
+.admin-market-detail-section dl div {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.admin-market-detail-section dt,
+.admin-market-detail-section dd {
+  margin: 0;
+  font-size: 0.67rem;
+  line-height: 1.4;
+}
+
+.admin-market-detail-section dt {
+  color: var(--muted);
+}
+
+.admin-market-outcome-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.admin-market-outcome-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.admin-market-outcome-list li:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.admin-market-outcome-list li > span {
+  display: grid;
+  gap: 2px;
+}
+
+.admin-market-outcome-list small {
+  color: var(--muted);
+  font-size: 0.62rem;
+}
+
+.admin-market-empty .button {
+  margin-top: 10px;
+}
+
 .admin-row-action.is-danger:hover {
   background: var(--coral-soft);
 }
@@ -5404,6 +5746,14 @@ a.exchange-activity-item:focus-visible {
   .exchange-activity-panel.has-mobile-overflow .exchange-activity-toggle-mobile {
     display: flex;
   }
+
+  .admin-market-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-market-filter-row {
+    justify-content: flex-start;
+  }
 }
 
 @media (max-width: 960px) {
@@ -5511,6 +5861,7 @@ a.exchange-activity-item:focus-visible {
   .settings-columns {
     grid-template-columns: 1fr;
   }
+
 }
 
 @media (max-width: 720px) {
@@ -5606,6 +5957,28 @@ a.exchange-activity-item:focus-visible {
 
   .admin-people-actions {
     grid-template-columns: 1fr;
+  }
+
+  .admin-market-toolbar {
+    gap: 10px;
+  }
+
+  .admin-market-result-count {
+    align-self: center;
+  }
+
+  .admin-market-card .table-scroll {
+    overscroll-behavior-inline: contain;
+    touch-action: pan-x pan-y;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .admin-markets-table th:first-child,
+  .admin-markets-table td.admin-market-question-cell,
+  .admin-markets-table th:last-child,
+  .admin-markets-table td.admin-person-actions-cell {
+    position: static;
+    box-shadow: none;
   }
 
   .notification-mode-header {
@@ -6288,6 +6661,19 @@ a.exchange-activity-item:focus-visible {
 
   .balance-value-compact {
     display: inline;
+  }
+
+  .admin-section-link {
+    padding-right: 7px;
+    padding-left: 7px;
+    font-size: 0.7rem;
+  }
+
+  .admin-nav-badge {
+    min-width: 18px;
+    margin-left: 4px;
+    padding-right: 5px;
+    padding-left: 5px;
   }
 }
 

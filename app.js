@@ -185,6 +185,11 @@
     leaderboardSortDirection: "desc",
     adminPeopleSortKey: "approved",
     adminPeopleSortDirection: "desc",
+    adminMarketFilter: "all",
+    adminMarketSearch: "",
+    adminMarketSortKey: "priority",
+    adminMarketSortDirection: "asc",
+    adminMarketExpandedIds: new Set(),
     oddsHistoryMarketId: null,
     selectedOutcomeByMarket: new Map(),
     lastRenderedMarketOdds: new Map(),
@@ -570,6 +575,11 @@
     state.leaderboardSortDirection = "desc";
     state.adminPeopleSortKey = "approved";
     state.adminPeopleSortDirection = "desc";
+    state.adminMarketFilter = "all";
+    state.adminMarketSearch = "";
+    state.adminMarketSortKey = "priority";
+    state.adminMarketSortDirection = "asc";
+    state.adminMarketExpandedIds = new Set();
     state.oddsHistoryMarketId = null;
     state.selectedOutcomeByMarket = new Map();
     state.lastRenderedMarketOdds = new Map();
@@ -5949,12 +5959,20 @@
     );
     bindAdminPageEvents(invitationResult.data || []);
     if (adminView === "notifications") bindAdminNotificationPageEvents();
+    if (adminView === "markets") {
+      bindAdminMarketPageEvents(
+        invitationResult.data || [],
+        invitationResult.error || null,
+        notificationResult.error || null,
+      );
+      setupScrollableFilterRows();
+    }
     setupScrollableTableFades();
   }
 
   function getAdminView() {
     const view = getRoute().id;
-    return view === "notifications" ? "notifications" : "people";
+    return ["markets", "notifications"].includes(view) ? view : "people";
   }
 
   function getNotificationTemplate(kind = "new_market", market = null) {
@@ -6019,6 +6037,7 @@
   function buildAdminShellMarkup(activeView, content, badges = {}) {
     const sections = [
       { id: "people", label: "People", href: "#/admin" },
+      { id: "markets", label: "Markets", href: "#/admin/markets" },
       { id: "notifications", label: "Notifications", href: "#/admin/notifications" },
     ];
 
@@ -6027,7 +6046,7 @@
         <div>
           <p class="eyebrow">Administrator</p>
           <h1>Exchange operations.</h1>
-          <p>Manage the people, access, and delivery systems behind the exchange.</p>
+          <p>Manage the people, markets, access, and delivery systems behind the exchange.</p>
         </div>
       </div>
       <nav class="admin-section-nav" aria-label="Admin sections">
@@ -6060,9 +6079,474 @@
     };
     const content = activeView === "notifications"
       ? buildAdminNotificationsMarkup(notificationOverview, notificationError)
-      : buildAdminPeopleMarkup(invitations, invitationError);
+      : activeView === "markets"
+        ? buildAdminMarketsMarkup()
+        : buildAdminPeopleMarkup(invitations, invitationError);
 
     return buildAdminShellMarkup(activeView, content, badges);
+  }
+
+  function getAdminMarketOperationalState(market, now = Date.now()) {
+    if (market.archived_at) {
+      return {
+        key: "archived",
+        label: "Archived",
+        pillStatus: "archived",
+        note: "Voided record",
+        attention: false,
+        priority: 6,
+      };
+    }
+    if (market.status === "resolved") {
+      return {
+        key: "resolved",
+        label: "Resolved",
+        pillStatus: "resolved",
+        note: market.winner?.label ? `Winner: ${market.winner.label}` : "Settlement complete",
+        attention: false,
+        priority: 4,
+      };
+    }
+    if (market.status === "void") {
+      return {
+        key: "void",
+        label: "Voided",
+        pillStatus: "void",
+        note: `${formatNumber(market.actualTotal)} points refunded`,
+        attention: false,
+        priority: 5,
+      };
+    }
+    if (market.displayStatus === "closed") {
+      return {
+        key: "closed",
+        label: "Trading closed",
+        pillStatus: "closed",
+        note: "Needs resolution",
+        attention: true,
+        priority: 0,
+      };
+    }
+    if (isExpectedOutcomePast(market, now)) {
+      return {
+        key: "open",
+        label: "Trading open",
+        pillStatus: "open",
+        note: "Outcome overdue",
+        attention: true,
+        priority: 1,
+      };
+    }
+
+    const closesAt = getTimestamp(market.closes_at, NaN);
+    const closingSoon = market.closeMode === "date"
+      && Number.isFinite(closesAt)
+      && closesAt > now
+      && closesAt - now <= 24 * 60 * 60 * 1000;
+    return {
+      key: "open",
+      label: "Trading open",
+      pillStatus: "open",
+      note: closingSoon
+        ? "Closes within 24 hours"
+        : market.closeMode === "outcome" ? "Open until outcome" : "Accepting predictions",
+      attention: false,
+      priority: closingSoon ? 2 : 3,
+    };
+  }
+
+  function getAdminMarketCounts(markets) {
+    return markets.reduce((counts, market) => {
+      const operationalState = getAdminMarketOperationalState(market);
+      counts.all += 1;
+      counts[operationalState.key] += 1;
+      if (operationalState.attention) counts.attention += 1;
+      return counts;
+    }, {
+      all: 0,
+      attention: 0,
+      open: 0,
+      closed: 0,
+      resolved: 0,
+      void: 0,
+      archived: 0,
+    });
+  }
+
+  function getAdminMarketSortValue(market, key) {
+    if (key === "market") return String(market.question || "").toLocaleLowerCase();
+    if (key === "priority") return getAdminMarketOperationalState(market).priority;
+    if (key === "points") return Number(market.actualTotal) || 0;
+    if (key === "participation") return Number(market.participants) || 0;
+    if (key === "opened") return getTimestamp(market.created_at, NaN);
+    if (key === "cutoff") {
+      if (market.status === "resolved") {
+        return market.eligibility_cutoff_at
+          ? getTimestamp(market.eligibility_cutoff_at, NaN)
+          : null;
+      }
+      return market.closeMode === "date" && market.closes_at
+        ? getTimestamp(market.closes_at, NaN)
+        : null;
+    }
+    if (key === "expected") return getExpectedOutcomeEndTimestamp(market);
+    if (key === "settled") {
+      return market.resolved_at ? getTimestamp(market.resolved_at, NaN) : null;
+    }
+    return null;
+  }
+
+  function sortAdminMarkets(markets) {
+    const key = state.adminMarketSortKey || "priority";
+    const direction = state.adminMarketSortDirection === "desc" ? "desc" : "asc";
+
+    return [...markets].sort((a, b) => {
+      const aValue = getAdminMarketSortValue(a, key);
+      const bValue = getAdminMarketSortValue(b, key);
+      const aMissing = aValue === null || aValue === "" || Number.isNaN(aValue);
+      const bMissing = bValue === null || bValue === "" || Number.isNaN(bValue);
+      if (aMissing !== bMissing) return aMissing ? 1 : -1;
+
+      let comparison = 0;
+      if (!aMissing && !bMissing) {
+        comparison = typeof aValue === "string"
+          ? aValue.localeCompare(bValue)
+          : aValue - bValue;
+      }
+      if (comparison) return direction === "asc" ? comparison : -comparison;
+
+      const openedComparison = getTimestamp(b.created_at, 0) - getTimestamp(a.created_at, 0);
+      if (openedComparison) return openedComparison;
+      return Number(b.id) - Number(a.id);
+    });
+  }
+
+  function formatAdminMarketMoment(value, note = "") {
+    if (!value || !Number.isFinite(getTimestamp(value, NaN))) {
+      return '<span class="admin-market-empty-value">—</span>';
+    }
+    const exact = formatDateTime(value);
+    const relative = formatRelativeDate(value);
+    const context = [note, relative !== exact ? relative : ""].filter(Boolean).join(" · ");
+    return `
+      <span class="admin-market-date">
+        <strong>${escapeHtml(exact)}</strong>
+        ${context ? `<small>${escapeHtml(context)}</small>` : ""}
+      </span>
+    `;
+  }
+
+  function buildAdminMarketCutoffMarkup(market) {
+    if (market.status === "resolved" && market.eligibility_cutoff_at) {
+      const actualCutoff = getTimestamp(market.eligibility_cutoff_at, NaN);
+      const scheduledClose = getTimestamp(market.closes_at, NaN);
+      const wasEarlierThanScheduled = market.closeMode === "date"
+        && Number.isFinite(actualCutoff)
+        && Number.isFinite(scheduledClose)
+        && actualCutoff < scheduledClose - 60 * 1000;
+      return formatAdminMarketMoment(
+        market.eligibility_cutoff_at,
+        wasEarlierThanScheduled ? "Actual · earlier than scheduled" : "Actual cutoff",
+      );
+    }
+    if (market.closeMode === "outcome") {
+      return `
+        <span class="admin-market-date">
+          <strong>At outcome</strong>
+          <small>${market.status === "open" ? "Not known yet" : "No cutoff recorded"}</small>
+        </span>
+      `;
+    }
+    return formatAdminMarketMoment(
+      market.closes_at,
+      market.status === "open" ? "Scheduled close" : "Original schedule",
+    );
+  }
+
+  function buildAdminMarketExpectedMarkup(market) {
+    const configuration = getExpectedOutcomeConfiguration(market);
+    if (!configuration) return '<span class="admin-market-empty-value">—</span>';
+    const expectedLabel = formatExpectedOutcome(market).replace(/^Expected\s+/, "");
+    const relative = formatExpectedOutcomeRelative(market);
+    const overdue = market.status === "open" && isExpectedOutcomePast(market);
+    const overdueRelative = overdue
+      ? formatRelativeDate(new Date(getExpectedOutcomeEndTimestamp(market)).toISOString())
+      : null;
+    return `
+      <span class="admin-market-date">
+        <strong>${escapeHtml(expectedLabel)}</strong>
+        <small class="${overdue ? "is-attention" : ""}">${escapeHtml(
+          overdue ? `Outcome overdue · ${overdueRelative}` : relative || "Display estimate",
+        )}</small>
+      </span>
+    `;
+  }
+
+  function buildAdminMarketSettlementMarkup(market) {
+    if (market.status === "resolved") {
+      return `
+        <span class="admin-market-result">
+          <strong>${escapeHtml(market.winner?.label || "Resolved")}</strong>
+          ${market.resolved_at ? `<small>${escapeHtml(formatDateTime(market.resolved_at))}</small>` : ""}
+        </span>
+      `;
+    }
+    if (market.status === "void") {
+      return `
+        <span class="admin-market-result">
+          <strong>${market.archived_at ? "Voided · archived" : "Voided"}</strong>
+          ${market.resolved_at ? `<small>${escapeHtml(formatDateTime(market.resolved_at))}</small>` : ""}
+        </span>
+      `;
+    }
+    return '<span class="admin-market-empty-value">—</span>';
+  }
+
+  function buildAdminMarketDetailRow(market) {
+    const resolutionSource = market.resolution_source_url
+      ? `<a class="text-link" href="${escapeAttribute(market.resolution_source_url)}" target="_blank" rel="noopener noreferrer">View result source</a>`
+      : "";
+    const closeRule = market.closeMode === "outcome"
+      ? "Open until the outcome becomes known"
+      : market.closes_at ? `Scheduled for ${formatDateTime(market.closes_at)}` : "Scheduled close unavailable";
+    const expectedTimeZone = getExpectedOutcomeConfiguration(market)
+      ? getExpectedOutcomeTimeZoneLabel(market)
+      : "No expected timing recorded";
+    const archivedBy = state.profiles.find((profile) => profile.id === market.archived_by);
+    const settlementDetail = market.status === "resolved"
+      ? `
+        <div class="admin-market-detail-section">
+          <p class="eyebrow">Resolution record</p>
+          <strong>${escapeHtml(market.winner?.label || "Winner unavailable")}</strong>
+          <p>${escapeHtml(market.resolution_note || "No resolution note was recorded for this historical market.")}</p>
+          <small>${market.resolver?.display_name ? `Resolved by ${escapeHtml(market.resolver.display_name)}` : "Resolver unavailable"}${market.lateTotal ? ` · ${formatNumber(market.lateTotal)} late points refunded` : ""}</small>
+          ${resolutionSource}
+        </div>
+      `
+      : market.status === "void"
+        ? `
+          <div class="admin-market-detail-section">
+            <p class="eyebrow">Void record</p>
+            <strong>${formatNumber(market.actualTotal)} points refunded</strong>
+            <p>${market.archived_at
+              ? `Archived ${escapeHtml(formatDateTime(market.archived_at))}${archivedBy?.display_name ? ` by ${escapeHtml(archivedBy.display_name)}` : ""}.`
+              : "This record remains in the ordinary Voided list."}</p>
+          </div>
+        `
+        : `
+          <div class="admin-market-detail-section">
+            <p class="eyebrow">Operations</p>
+            <strong>${formatNumber(market.predictions.length)} ${pluralize(market.predictions.length, "prediction")}</strong>
+            <p>${escapeHtml(getAdminMarketOperationalState(market).note)}.</p>
+          </div>
+        `;
+
+    return `
+      <tr class="admin-market-detail-row" data-admin-market-detail-row="${market.id}">
+        <td colspan="9">
+          <div class="admin-market-detail-grid">
+            <div class="admin-market-detail-section">
+              <p class="eyebrow">Market brief</p>
+              <p>${escapeHtml(market.description || "No additional details were provided.")}</p>
+              <dl>
+                <div><dt>Creator</dt><dd>${escapeHtml(market.creator?.display_name || "Unknown")}</dd></div>
+                <div><dt>Closing rule</dt><dd>${escapeHtml(closeRule)}</dd></div>
+                <div><dt>Expected-time zone</dt><dd>${escapeHtml(expectedTimeZone)}</dd></div>
+              </dl>
+            </div>
+            <div class="admin-market-detail-section">
+              <p class="eyebrow">Outcomes</p>
+              <ul class="admin-market-outcome-list">
+                ${market.outcomes.map((outcome) => `
+                  <li>
+                    <span><strong>${escapeHtml(outcome.label)}</strong><small>${escapeHtml(formatPercent(outcome.percent))} community odds</small></span>
+                    <strong>${formatNumber(outcome.actualPoints)} pts</strong>
+                  </li>
+                `).join("")}
+              </ul>
+            </div>
+            ${settlementDetail}
+          </div>
+        </td>
+      </tr>
+    `;
+  }
+
+  function buildAdminMarketActionsMarkup(market) {
+    const actions = [
+      `<a class="admin-row-action" href="#/market/${market.id}">View market</a>`,
+    ];
+    if (market.status === "open") {
+      actions.push(
+        `<button class="admin-row-action" data-admin-market-edit="${market.id}" type="button">Edit market</button>`,
+        `<button class="admin-row-action" data-admin-market-resolve="${market.id}" type="button">Resolve market</button>`,
+        `<button class="admin-row-action is-danger" data-admin-market-void="${market.id}" type="button">Void &amp; refund</button>`,
+      );
+    } else if (market.status === "void" && market.archived_at) {
+      actions.push(`<button class="admin-row-action" data-admin-market-restore="${market.id}" type="button">Restore record</button>`);
+    } else if (market.status === "void" && market.predictions.length > 0) {
+      actions.push(`<button class="admin-row-action" data-admin-market-archive="${market.id}" type="button">Archive record</button>`);
+    } else if (market.status === "void") {
+      actions.push(`<button class="admin-row-action is-danger" data-admin-market-delete="${market.id}" type="button">Delete permanently</button>`);
+    }
+    return actions.join("");
+  }
+
+  function buildAdminMarketsMarkup() {
+    const allMarkets = getAllMarkets();
+    const counts = getAdminMarketCounts(allMarkets);
+    const activeFilter = ["all", "attention", "open", "closed", "resolved", "void", "archived"]
+      .includes(state.adminMarketFilter) ? state.adminMarketFilter : "all";
+    const query = String(state.adminMarketSearch || "").trim().toLocaleLowerCase();
+    const filteredMarkets = sortAdminMarkets(allMarkets.filter((market) => {
+      const operationalState = getAdminMarketOperationalState(market);
+      const matchesFilter = activeFilter === "all"
+        || (activeFilter === "attention" && operationalState.attention)
+        || operationalState.key === activeFilter;
+      if (!matchesFilter) return false;
+      if (!query) return true;
+      return [
+        market.id,
+        market.question,
+        market.description,
+        market.creator?.display_name,
+        ...market.outcomes.map((outcome) => outcome.label),
+      ].some((value) => String(value || "").toLocaleLowerCase().includes(query));
+    }));
+    const filters = [
+      { id: "all", label: "All", count: counts.all },
+      { id: "attention", label: "Attention", count: counts.attention },
+      { id: "open", label: "Open", count: counts.open },
+      { id: "closed", label: "Closed", count: counts.closed },
+      { id: "resolved", label: "Resolved", count: counts.resolved },
+      { id: "void", label: "Voided", count: counts.void },
+      { id: "archived", label: "Archived", count: counts.archived },
+    ];
+    const sortableHeader = (key, label, className = "") => {
+      const isActive = state.adminMarketSortKey === key;
+      const ariaSort = isActive
+        ? state.adminMarketSortDirection === "asc" ? "ascending" : "descending"
+        : "none";
+      const indicator = isActive
+        ? state.adminMarketSortDirection === "asc" ? "↑" : "↓"
+        : "↕";
+      return `
+        <th${className ? ` class="${className}"` : ""} aria-sort="${ariaSort}">
+          <button class="table-sort-button" type="button" data-admin-market-sort="${key}">
+            <span>${label}</span>
+            <span class="sort-indicator" aria-hidden="true">${indicator}</span>
+          </button>
+        </th>
+      `;
+    };
+    const rows = filteredMarkets.map((market) => {
+      const operationalState = getAdminMarketOperationalState(market);
+      const isExpanded = state.adminMarketExpandedIds.has(String(market.id));
+      const pointContext = market.status === "void"
+        ? "refunded"
+        : market.status === "resolved" ? "final pool" : "committed";
+      return `
+        <tr class="admin-market-row${operationalState.attention ? " needs-attention" : ""}" data-admin-market-row="${market.id}">
+          <td class="admin-market-question-cell">
+            <div class="admin-market-question">
+              <button
+                class="admin-market-expand"
+                data-admin-market-expand="${market.id}"
+                type="button"
+                aria-expanded="${String(isExpanded)}"
+                aria-label="${isExpanded ? "Hide" : "Show"} details for market ${market.id}"
+              ><i class="fa-solid fa-chevron-${isExpanded ? "down" : "right"}" aria-hidden="true"></i></button>
+              <div>
+                <a href="#/market/${market.id}">${escapeHtml(market.question)}</a>
+                <small><span class="mono">#${market.id}</span> · by ${escapeHtml(market.creator?.display_name || "Unknown")}</small>
+              </div>
+            </div>
+          </td>
+          <td class="admin-market-status-cell">
+            <span class="status-pill status-${operationalState.pillStatus}">${escapeHtml(operationalState.label)}</span>
+            <small class="${operationalState.attention ? "is-attention" : ""}">${escapeHtml(operationalState.note)}</small>
+          </td>
+          <td class="admin-market-points-cell numeric-cell">
+            <strong class="mono">${formatNumber(market.actualTotal)}</strong>
+            <small>${pointContext}</small>
+          </td>
+          <td class="admin-market-participation-cell">
+            <strong>${formatNumber(market.participants)} ${pluralize(market.participants, "trader")}</strong>
+            <small>${formatNumber(market.predictions.length)} ${pluralize(market.predictions.length, "prediction")}</small>
+          </td>
+          <td>${formatAdminMarketMoment(market.created_at, "Opened")}</td>
+          <td>${buildAdminMarketCutoffMarkup(market)}</td>
+          <td>${buildAdminMarketExpectedMarkup(market)}</td>
+          <td>${buildAdminMarketSettlementMarkup(market)}</td>
+          <td class="admin-person-actions-cell">
+            <details class="admin-overflow-menu admin-row-menu">
+              <summary class="icon-button" aria-label="Actions for market ${market.id}">
+                <i class="fa-solid fa-ellipsis-vertical" aria-hidden="true"></i>
+              </summary>
+              <div class="admin-overflow-menu-popover">${buildAdminMarketActionsMarkup(market)}</div>
+            </details>
+          </td>
+        </tr>
+        ${isExpanded ? buildAdminMarketDetailRow(market) : ""}
+      `;
+    }).join("");
+    const resultLabel = query || activeFilter !== "all"
+      ? `Showing ${formatNumber(filteredMarkets.length)} of ${formatNumber(allMarkets.length)} markets`
+      : `${formatNumber(allMarkets.length)} ${pluralize(allMarkets.length, "market")}`;
+
+    return `
+      <section class="admin-market-toolbar" aria-label="Market table controls">
+        <label class="admin-market-search" for="admin-market-search">
+          <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+          <input id="admin-market-search" type="search" placeholder="Search ID, question, creator, or outcome" value="${escapeAttribute(state.adminMarketSearch || "")}" autocomplete="off" />
+        </label>
+        <div class="filter-row admin-market-filter-row" aria-label="Filter markets">
+          ${filters.map((filter) => `
+            <button
+              class="filter-chip${filter.id === activeFilter ? " active" : ""}"
+              data-admin-market-filter="${filter.id}"
+              type="button"
+              aria-pressed="${String(filter.id === activeFilter)}"
+            >${filter.label}<span>${formatNumber(filter.count)}</span></button>
+          `).join("")}
+        </div>
+      </section>
+      <section class="table-card admin-market-card">
+        <div class="admin-table-heading">
+          <div>
+            <h2>Market operations</h2>
+            <p>Actionable markets appear first. Dates are shown in your local time.</p>
+          </div>
+          <span class="admin-market-result-count">${escapeHtml(resultLabel)}</span>
+        </div>
+        ${filteredMarkets.length ? `
+          <div data-scrollable-table><div class="table-scroll">
+            <table class="data-table admin-markets-table">
+              <caption class="visually-hidden">All markets and operational details</caption>
+              <thead><tr>
+                ${sortableHeader("market", "Market")}
+                ${sortableHeader("priority", "Status")}
+                ${sortableHeader("points", "Points", "admin-market-numeric-heading")}
+                ${sortableHeader("participation", "Participation")}
+                ${sortableHeader("opened", "Opened")}
+                ${sortableHeader("cutoff", "Prediction cutoff")}
+                ${sortableHeader("expected", "Outcome expected")}
+                ${sortableHeader("settled", "Result / settled")}
+                <th>Action</th>
+              </tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div></div>
+        ` : `
+          <div class="empty-state compact-empty-state admin-market-empty">
+            <div class="empty-state-icon">⌕</div>
+            <h2>No markets match.</h2>
+            <p>Try another search or return to the complete market list.</p>
+            <button class="button button-secondary" data-admin-market-clear type="button">Clear filters</button>
+          </div>
+        `}
+      </section>
+    `;
   }
 
   function buildAdminPeopleMarkup(invitations, invitationError = null) {
@@ -6733,6 +7217,106 @@
       });
     });
     document.querySelector("#retry-admin-button")?.addEventListener("click", renderAdmin);
+  }
+
+  function bindAdminMarketPageEvents(
+    invitations = [],
+    invitationError = null,
+    notificationError = null,
+  ) {
+    const rerenderMarkets = ({ focusSearch = false, focusMarketId = null } = {}) => {
+      dom.main.innerHTML = buildAdminPageMarkup(
+        "markets",
+        invitations,
+        state.notificationAdminOverview,
+        invitationError,
+        notificationError,
+      );
+      bindAdminPageEvents(invitations);
+      bindAdminMarketPageEvents(invitations, invitationError, notificationError);
+      setupScrollableTableFades();
+      setupScrollableFilterRows();
+      if (focusSearch) {
+        const input = document.querySelector("#admin-market-search");
+        input?.focus();
+        input?.setSelectionRange?.(input.value.length, input.value.length);
+      } else if (focusMarketId !== null) {
+        document.querySelector(`[data-admin-market-expand="${focusMarketId}"]`)?.focus();
+      }
+    };
+    const findMarket = (value) => getAllMarkets().find(
+      (market) => Number(market.id) === Number(value),
+    );
+    const bindMarketAction = (selector, openAction) => {
+      document.querySelectorAll(selector).forEach((button) => {
+        button.addEventListener("click", () => {
+          button.closest("details")?.removeAttribute("open");
+          const market = findMarket(
+            button.dataset.adminMarketEdit
+              || button.dataset.adminMarketResolve
+              || button.dataset.adminMarketVoid
+              || button.dataset.adminMarketArchive
+              || button.dataset.adminMarketRestore
+              || button.dataset.adminMarketDelete,
+          );
+          if (market) openAction(market);
+        });
+      });
+    };
+
+    document.querySelectorAll("[data-admin-market-filter]").forEach((button) => {
+      button.addEventListener("click", () => {
+        state.adminMarketFilter = button.dataset.adminMarketFilter || "all";
+        rerenderMarkets();
+      });
+    });
+    document.querySelectorAll("[data-admin-market-sort]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const nextKey = button.dataset.adminMarketSort;
+        if (state.adminMarketSortKey === nextKey) {
+          state.adminMarketSortDirection = state.adminMarketSortDirection === "asc"
+            ? "desc"
+            : "asc";
+        } else {
+          state.adminMarketSortKey = nextKey;
+          state.adminMarketSortDirection = ["market", "priority", "cutoff", "expected"]
+            .includes(nextKey) ? "asc" : "desc";
+        }
+        rerenderMarkets();
+      });
+    });
+    document.querySelector("#admin-market-search")?.addEventListener("input", (event) => {
+      if (event.isComposing) return;
+      state.adminMarketSearch = event.currentTarget.value;
+      rerenderMarkets({ focusSearch: true });
+    });
+    document.querySelectorAll("[data-admin-market-expand]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const marketId = String(button.dataset.adminMarketExpand);
+        if (state.adminMarketExpandedIds.has(marketId)) {
+          state.adminMarketExpandedIds.delete(marketId);
+        } else {
+          state.adminMarketExpandedIds.add(marketId);
+        }
+        rerenderMarkets({ focusMarketId: marketId });
+      });
+    });
+    document.querySelector("[data-admin-market-clear]")?.addEventListener("click", () => {
+      state.adminMarketFilter = "all";
+      state.adminMarketSearch = "";
+      rerenderMarkets({ focusSearch: true });
+    });
+
+    bindMarketAction("[data-admin-market-edit]", openEditMarketModal);
+    bindMarketAction("[data-admin-market-resolve]", openResolveModal);
+    bindMarketAction("[data-admin-market-void]", openVoidModal);
+    bindMarketAction("[data-admin-market-archive]", (market) => {
+      openArchiveVoidMarketModal(market, true);
+    });
+    bindMarketAction("[data-admin-market-restore]", (market) => {
+      openArchiveVoidMarketModal(market, false);
+    });
+    bindMarketAction("[data-admin-market-delete]", openDeleteVoidMarketModal);
   }
 
   function openApproveEmailModal(invitations = []) {
@@ -8133,6 +8717,7 @@
 
   function openDeleteVoidMarketModal(market) {
     if (!state.profile?.is_admin || market.status !== "void" || market.predictions.length !== 0) return;
+    const returnToAdminMarkets = getRoute().page === "admin" && getAdminView() === "markets";
 
     openModal(`
       <div class="modal-header">
@@ -8173,12 +8758,13 @@
 
       closeModal();
       await refreshData({ quiet: true });
-      window.location.hash = "#/markets";
+      if (!returnToAdminMarkets) window.location.hash = "#/markets";
       showToast("The empty voided market has been removed.", "success");
     });
   }
 
   function openArchiveVoidMarketModal(market, shouldArchive) {
+    const returnToAdminMarkets = getRoute().page === "admin" && getAdminView() === "markets";
     const isValidArchive =
       shouldArchive &&
       !market.archived_at &&
@@ -8237,8 +8823,10 @@
       }
 
       closeModal();
-      state.marketFilter = shouldArchive ? "archived" : "void";
-      window.location.hash = "#/markets";
+      if (!returnToAdminMarkets) {
+        state.marketFilter = shouldArchive ? "archived" : "void";
+        window.location.hash = "#/markets";
+      }
       await refreshData({ quiet: true });
       showToast(
         shouldArchive

@@ -32,9 +32,10 @@ delivery.
   enrolled-device cleanup
 - Account-wide, opt-in Web Push preferences for new markets, closing soon, and
   resolution or void alerts, delivered to each enrolled device
-- A focused administrator workspace with People and Notifications views,
-  including a unified people registry, status-aware member actions, protected
-  notification testing, and an expandable recent-delivery history
+- A focused administrator workspace with People, Markets, and Notifications
+  views, including a unified people registry, an attention-first market
+  operations table, status-aware actions, protected notification testing, and
+  an expandable recent-delivery history
 - Aggregated monthly allowance distributions in the exchange activity feed
 - Market creation by any confirmed member, with optional details and 2–6
   outcomes, including simple Yes/No questions
