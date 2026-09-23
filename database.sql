@@ -129,6 +129,10 @@ create table if not exists public.markets (
   description text,
   close_mode text not null default 'date',
   closes_at timestamptz,
+  expected_outcome_date date,
+  expected_outcome_timing text,
+  expected_outcome_time time without time zone,
+  expected_outcome_timezone text,
   status text not null default 'open',
   winning_outcome_id bigint,
   resolution_note text,
@@ -156,6 +160,25 @@ create table if not exists public.markets (
     check (
       (close_mode = 'date' and closes_at is not null)
       or (close_mode = 'outcome' and closes_at is null)
+    ),
+  constraint markets_expected_outcome_configuration_valid
+    check (
+      (
+        expected_outcome_date is null
+        and expected_outcome_timing is null
+        and expected_outcome_time is null
+        and expected_outcome_timezone is null
+      )
+      or (
+        expected_outcome_date is not null
+        and expected_outcome_timing in ('specific', 'morning', 'afternoon', 'evening', 'date')
+        and nullif(btrim(expected_outcome_timezone), '') is not null
+        and char_length(expected_outcome_timezone) <= 100
+        and (
+          (expected_outcome_timing = 'specific' and expected_outcome_time is not null)
+          or (expected_outcome_timing <> 'specific' and expected_outcome_time is null)
+        )
+      )
     ),
   constraint markets_resolution_source_url_length
     check (
@@ -603,6 +626,10 @@ create or replace function public.create_market(
   p_description text,
   p_close_mode text,
   p_closes_at timestamptz,
+  p_expected_outcome_date date,
+  p_expected_outcome_timing text,
+  p_expected_outcome_time time without time zone,
+  p_expected_outcome_timezone text,
   p_outcome_labels text[]
 )
 returns bigint
@@ -616,6 +643,9 @@ declare
   v_question text := btrim(coalesce(p_question, ''));
   v_description text := nullif(btrim(coalesce(p_description, '')), '');
   v_close_mode text := lower(btrim(coalesce(p_close_mode, '')));
+  v_expected_outcome_timing text := lower(btrim(coalesce(p_expected_outcome_timing, '')));
+  v_expected_outcome_timezone text := nullif(btrim(coalesce(p_expected_outcome_timezone, '')), '');
+  v_expected_outcome_end_at timestamptz;
   v_outcome_count integer;
 begin
   if v_user_id is null then
@@ -640,6 +670,51 @@ begin
 
   if v_close_mode = 'outcome' and p_closes_at is not null then
     raise exception 'Open-until-outcome markets cannot have a scheduled closing time.';
+  end if;
+
+  if p_expected_outcome_date is null then
+    if p_expected_outcome_timing is not null
+       or p_expected_outcome_time is not null
+       or p_expected_outcome_timezone is not null then
+      raise exception 'Expected outcome timing requires a date.';
+    end if;
+  else
+    if v_expected_outcome_timing not in ('specific', 'morning', 'afternoon', 'evening', 'date') then
+      raise exception 'Choose how precise the expected outcome timing is.';
+    end if;
+
+    if v_expected_outcome_timezone is null
+       or char_length(v_expected_outcome_timezone) > 100
+       or not exists (
+         select 1
+         from pg_timezone_names
+         where name = v_expected_outcome_timezone
+       ) then
+      raise exception 'The expected outcome timezone is not valid.';
+    end if;
+
+    if v_expected_outcome_timing = 'specific' and p_expected_outcome_time is null then
+      raise exception 'Choose the specific expected outcome time.';
+    end if;
+
+    if v_expected_outcome_timing <> 'specific' and p_expected_outcome_time is not null then
+      raise exception 'Only a specific expected outcome can include a clock time.';
+    end if;
+
+    v_expected_outcome_end_at := case v_expected_outcome_timing
+      when 'specific' then
+        (p_expected_outcome_date + p_expected_outcome_time) at time zone v_expected_outcome_timezone
+      when 'morning' then
+        (p_expected_outcome_date + time '12:00') at time zone v_expected_outcome_timezone
+      when 'afternoon' then
+        (p_expected_outcome_date + time '17:00') at time zone v_expected_outcome_timezone
+      else
+        ((p_expected_outcome_date + 1) + time '00:00') at time zone v_expected_outcome_timezone
+    end;
+
+    if v_expected_outcome_end_at <= now() then
+      raise exception 'The expected outcome must still be in the future.';
+    end if;
   end if;
 
   v_outcome_count := coalesce(cardinality(p_outcome_labels), 0);
@@ -668,14 +743,22 @@ begin
     question,
     description,
     close_mode,
-    closes_at
+    closes_at,
+    expected_outcome_date,
+    expected_outcome_timing,
+    expected_outcome_time,
+    expected_outcome_timezone
   )
   values (
     v_user_id,
     v_question,
     v_description,
     v_close_mode,
-    p_closes_at
+    p_closes_at,
+    p_expected_outcome_date,
+    nullif(v_expected_outcome_timing, ''),
+    case when v_expected_outcome_timing = 'specific' then p_expected_outcome_time else null end,
+    v_expected_outcome_timezone
   )
   returning id into v_market_id;
 
@@ -692,6 +775,7 @@ end;
 $$;
 
 drop function if exists public.edit_market(bigint, text, text, text, timestamptz);
+drop function if exists public.edit_market(bigint, text, text, text, timestamptz, jsonb);
 
 create or replace function public.edit_market(
   p_market_id bigint,
@@ -699,6 +783,10 @@ create or replace function public.edit_market(
   p_description text,
   p_close_mode text,
   p_closes_at timestamptz,
+  p_expected_outcome_date date,
+  p_expected_outcome_timing text,
+  p_expected_outcome_time time without time zone,
+  p_expected_outcome_timezone text,
   p_outcomes jsonb
 )
 returns bigint
@@ -713,6 +801,10 @@ declare
   v_question text := btrim(coalesce(p_question, ''));
   v_description text := nullif(btrim(coalesce(p_description, '')), '');
   v_close_mode text := lower(btrim(coalesce(p_close_mode, '')));
+  v_expected_outcome_timing text := lower(btrim(coalesce(p_expected_outcome_timing, '')));
+  v_expected_outcome_timezone text := nullif(btrim(coalesce(p_expected_outcome_timezone, '')), '');
+  v_expected_outcome_end_at timestamptz;
+  v_expected_configuration_changed boolean;
   v_outcome_count integer;
   v_existing_outcome_count integer;
 begin
@@ -761,6 +853,61 @@ begin
 
   if v_market.status <> 'open' then
     raise exception 'Only open markets can be edited.';
+  end if;
+
+  if p_expected_outcome_date is null then
+    if p_expected_outcome_timing is not null
+       or p_expected_outcome_time is not null
+       or p_expected_outcome_timezone is not null then
+      raise exception 'Expected outcome timing requires a date.';
+    end if;
+  else
+    if v_expected_outcome_timing not in ('specific', 'morning', 'afternoon', 'evening', 'date') then
+      raise exception 'Choose how precise the expected outcome timing is.';
+    end if;
+
+    if v_expected_outcome_timezone is null
+       or char_length(v_expected_outcome_timezone) > 100
+       or not exists (
+         select 1
+         from pg_timezone_names
+         where name = v_expected_outcome_timezone
+       ) then
+      raise exception 'The expected outcome timezone is not valid.';
+    end if;
+
+    if v_expected_outcome_timing = 'specific' and p_expected_outcome_time is null then
+      raise exception 'Choose the specific expected outcome time.';
+    end if;
+
+    if v_expected_outcome_timing <> 'specific' and p_expected_outcome_time is not null then
+      raise exception 'Only a specific expected outcome can include a clock time.';
+    end if;
+
+    v_expected_outcome_end_at := case v_expected_outcome_timing
+      when 'specific' then
+        (p_expected_outcome_date + p_expected_outcome_time) at time zone v_expected_outcome_timezone
+      when 'morning' then
+        (p_expected_outcome_date + time '12:00') at time zone v_expected_outcome_timezone
+      when 'afternoon' then
+        (p_expected_outcome_date + time '17:00') at time zone v_expected_outcome_timezone
+      else
+        ((p_expected_outcome_date + 1) + time '00:00') at time zone v_expected_outcome_timezone
+    end;
+  end if;
+
+  v_expected_configuration_changed :=
+    v_market.expected_outcome_date is distinct from p_expected_outcome_date
+    or v_market.expected_outcome_timing is distinct from nullif(v_expected_outcome_timing, '')
+    or v_market.expected_outcome_time is distinct from (
+      case when v_expected_outcome_timing = 'specific' then p_expected_outcome_time else null end
+    )
+    or v_market.expected_outcome_timezone is distinct from v_expected_outcome_timezone;
+
+  if p_expected_outcome_date is not null
+     and v_expected_configuration_changed
+     and v_expected_outcome_end_at <= now() then
+    raise exception 'The expected outcome must still be in the future.';
   end if;
 
   if p_outcomes is null or jsonb_typeof(p_outcomes) <> 'array' then
@@ -831,7 +978,14 @@ begin
     question = v_question,
     description = v_description,
     close_mode = v_close_mode,
-    closes_at = p_closes_at
+    closes_at = p_closes_at,
+    expected_outcome_date = p_expected_outcome_date,
+    expected_outcome_timing = nullif(v_expected_outcome_timing, ''),
+    expected_outcome_time = case
+      when v_expected_outcome_timing = 'specific' then p_expected_outcome_time
+      else null
+    end,
+    expected_outcome_timezone = v_expected_outcome_timezone
   where id = p_market_id;
 
   update public.outcomes as outcome
@@ -839,6 +993,126 @@ begin
   from jsonb_to_recordset(p_outcomes) as edit(id bigint, label text)
   where outcome.id = edit.id
     and outcome.market_id = p_market_id;
+
+  return p_market_id;
+end;
+$$;
+
+create or replace function public.set_market_expected_outcome(
+  p_market_id bigint,
+  p_expected_outcome_date date,
+  p_expected_outcome_timing text,
+  p_expected_outcome_time time without time zone,
+  p_expected_outcome_timezone text
+)
+returns bigint
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_is_admin boolean := false;
+  v_market public.markets%rowtype;
+  v_expected_outcome_timing text := lower(btrim(coalesce(p_expected_outcome_timing, '')));
+  v_expected_outcome_timezone text := nullif(btrim(coalesce(p_expected_outcome_timezone, '')), '');
+  v_expected_outcome_end_at timestamptz;
+  v_configuration_changed boolean;
+begin
+  if v_user_id is null then
+    raise exception 'You must be signed in.';
+  end if;
+
+  select coalesce(is_admin, false)
+  into v_is_admin
+  from public.profiles
+  where id = v_user_id;
+
+  v_is_admin := coalesce(v_is_admin, false);
+
+  select *
+  into v_market
+  from public.markets
+  where id = p_market_id
+  for update;
+
+  if not found then
+    raise exception 'Market not found.';
+  end if;
+
+  if v_market.creator_id <> v_user_id and not v_is_admin then
+    raise exception 'Only the market creator or an administrator can change expected timing.';
+  end if;
+
+  if v_market.status <> 'open' then
+    raise exception 'Expected timing can only be changed before a market is resolved or voided.';
+  end if;
+
+  if p_expected_outcome_date is null then
+    if p_expected_outcome_timing is not null
+       or p_expected_outcome_time is not null
+       or p_expected_outcome_timezone is not null then
+      raise exception 'Expected outcome timing requires a date.';
+    end if;
+  else
+    if v_expected_outcome_timing not in ('specific', 'morning', 'afternoon', 'evening', 'date') then
+      raise exception 'Choose how precise the expected outcome timing is.';
+    end if;
+
+    if v_expected_outcome_timezone is null
+       or char_length(v_expected_outcome_timezone) > 100
+       or not exists (
+         select 1
+         from pg_timezone_names
+         where name = v_expected_outcome_timezone
+       ) then
+      raise exception 'The expected outcome timezone is not valid.';
+    end if;
+
+    if v_expected_outcome_timing = 'specific' and p_expected_outcome_time is null then
+      raise exception 'Choose the specific expected outcome time.';
+    end if;
+
+    if v_expected_outcome_timing <> 'specific' and p_expected_outcome_time is not null then
+      raise exception 'Only a specific expected outcome can include a clock time.';
+    end if;
+
+    v_expected_outcome_end_at := case v_expected_outcome_timing
+      when 'specific' then
+        (p_expected_outcome_date + p_expected_outcome_time) at time zone v_expected_outcome_timezone
+      when 'morning' then
+        (p_expected_outcome_date + time '12:00') at time zone v_expected_outcome_timezone
+      when 'afternoon' then
+        (p_expected_outcome_date + time '17:00') at time zone v_expected_outcome_timezone
+      else
+        ((p_expected_outcome_date + 1) + time '00:00') at time zone v_expected_outcome_timezone
+    end;
+  end if;
+
+  v_configuration_changed :=
+    v_market.expected_outcome_date is distinct from p_expected_outcome_date
+    or v_market.expected_outcome_timing is distinct from nullif(v_expected_outcome_timing, '')
+    or v_market.expected_outcome_time is distinct from (
+      case when v_expected_outcome_timing = 'specific' then p_expected_outcome_time else null end
+    )
+    or v_market.expected_outcome_timezone is distinct from v_expected_outcome_timezone;
+
+  if p_expected_outcome_date is not null
+     and v_configuration_changed
+     and v_expected_outcome_end_at <= now() then
+    raise exception 'The expected outcome must still be in the future.';
+  end if;
+
+  update public.markets
+  set
+    expected_outcome_date = p_expected_outcome_date,
+    expected_outcome_timing = nullif(v_expected_outcome_timing, ''),
+    expected_outcome_time = case
+      when v_expected_outcome_timing = 'specific' then p_expected_outcome_time
+      else null
+    end,
+    expected_outcome_timezone = v_expected_outcome_timezone
+  where id = p_market_id;
 
   return p_market_id;
 end;
@@ -1976,8 +2250,9 @@ revoke all on function public.enforce_market_outcome_limit()
 revoke all on function public.update_display_name(text) from public, anon;
 revoke all on function public.update_profile(text, text) from public, anon;
 revoke all on function public.admin_update_profile(uuid, text, text) from public, anon;
-revoke all on function public.create_market(text, text, text, timestamptz, text[]) from public, anon;
-revoke all on function public.edit_market(bigint, text, text, text, timestamptz, jsonb) from public, anon;
+revoke all on function public.create_market(text, text, text, timestamptz, date, text, time without time zone, text, text[]) from public, anon;
+revoke all on function public.edit_market(bigint, text, text, text, timestamptz, date, text, time without time zone, text, jsonb) from public, anon;
+revoke all on function public.set_market_expected_outcome(bigint, date, text, time without time zone, text) from public, anon;
 revoke all on function public.place_prediction(bigint, bigint, bigint) from public, anon;
 revoke all on function public.resolve_market(bigint, bigint, text, timestamptz, text) from public, anon;
 revoke all on function public.void_market(bigint) from public, anon;
@@ -2000,8 +2275,9 @@ revoke all on function public.acknowledge_monthly_allowances(date) from public, 
 grant execute on function public.update_display_name(text) to authenticated;
 grant execute on function public.update_profile(text, text) to authenticated;
 grant execute on function public.admin_update_profile(uuid, text, text) to authenticated;
-grant execute on function public.create_market(text, text, text, timestamptz, text[]) to authenticated;
-grant execute on function public.edit_market(bigint, text, text, text, timestamptz, jsonb) to authenticated;
+grant execute on function public.create_market(text, text, text, timestamptz, date, text, time without time zone, text, text[]) to authenticated;
+grant execute on function public.edit_market(bigint, text, text, text, timestamptz, date, text, time without time zone, text, jsonb) to authenticated;
+grant execute on function public.set_market_expected_outcome(bigint, date, text, time without time zone, text) to authenticated;
 grant execute on function public.place_prediction(bigint, bigint, bigint) to authenticated;
 grant execute on function public.resolve_market(bigint, bigint, text, timestamptz, text) to authenticated;
 grant execute on function public.void_market(bigint) to authenticated;

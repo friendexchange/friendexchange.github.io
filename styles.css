@@ -2625,6 +2625,57 @@ a.exchange-activity-item:focus-visible {
   gap: 9px;
 }
 
+.edit-market-modal {
+  width: min(100%, 640px);
+  display: flex;
+  overflow: hidden;
+  flex-direction: column;
+}
+
+.edit-market-modal > form {
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.edit-market-modal .modal-header,
+.edit-market-modal .modal-footer {
+  flex: 0 0 auto;
+}
+
+.edit-market-modal .modal-body {
+  min-height: 0;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.edit-market-section + .edit-market-section {
+  margin-top: 26px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+}
+
+.edit-market-section-heading {
+  margin-bottom: 16px;
+}
+
+.edit-market-section-heading .eyebrow {
+  margin-bottom: 5px;
+}
+
+.edit-market-section-heading h3 {
+  margin: 0;
+  font-size: 0.96rem;
+  letter-spacing: -0.02em;
+}
+
+.edit-market-modal .modal-body > .trade-warning {
+  margin-bottom: 0;
+}
+
 .edit-market-outcome-row {
   display: grid;
   grid-template-columns: 32px minmax(0, 1fr);
@@ -2673,6 +2724,86 @@ a.exchange-activity-item:focus-visible {
   color: var(--muted);
   font-size: 0.7rem;
   line-height: 1.4;
+}
+
+.expected-outcome-editor {
+  margin-top: 16px;
+}
+
+.expected-outcome-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #faf9f2;
+  cursor: pointer;
+}
+
+.expected-outcome-toggle:has(input:checked) {
+  border-color: var(--ink);
+  background: var(--mint-soft);
+}
+
+.expected-outcome-toggle input {
+  width: 18px;
+  min-width: 18px;
+  min-height: 18px;
+  margin: 2px 0 0;
+  accent-color: var(--ink);
+}
+
+.expected-outcome-toggle span,
+.expected-outcome-toggle strong,
+.expected-outcome-toggle small {
+  display: block;
+}
+
+.expected-outcome-toggle small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+
+.expected-outcome-fields {
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: rgba(244, 242, 233, 0.58);
+}
+
+.expected-outcome-preview {
+  display: grid;
+  gap: 4px;
+  margin-top: 14px;
+  padding: 13px 14px;
+  border-radius: 10px;
+  background: var(--paper-strong);
+}
+
+.expected-outcome-preview > span,
+.expected-outcome-preview > small {
+  color: var(--muted);
+  font-size: 0.68rem;
+  line-height: 1.45;
+}
+
+.expected-outcome-preview > strong {
+  font-size: 0.84rem;
+}
+
+.expected-outcome-warning {
+  margin: 12px 0 0;
+  padding: 11px 12px;
+  border: 1px solid rgba(189, 46, 36, 0.2);
+  border-radius: 10px;
+  background: var(--coral-soft);
+  color: var(--danger);
+  font-size: 0.72rem;
+  line-height: 1.5;
 }
 
 .choice-row {

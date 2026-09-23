@@ -39,6 +39,8 @@ delivery.
 - Market creation by any confirmed member, with optional details and 2–6
   outcomes, including simple Yes/No questions
 - Scheduled markets and markets that remain open until the outcome becomes known
+- Optional expected outcome dates with specific-time, morning, afternoon,
+  evening, or date-only precision and automatic creator-timezone capture
 - Community odds based on the points committed to each outcome
 - Per-outcome latest-trade movement and adaptive ribbon/row odds history
 - Final predictions that cannot be withdrawn, with the option to add more

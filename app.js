@@ -42,6 +42,13 @@
   ]);
   const PROFILE_ICON_NAMES = new Set(PROFILE_ICON_OPTIONS.map((icon) => icon.name));
   const MAX_MARKET_OUTCOMES = 6;
+  const EXPECTED_OUTCOME_TIMINGS = new Set([
+    "specific",
+    "morning",
+    "afternoon",
+    "evening",
+    "date",
+  ]);
   const MARKET_ACTIVITY_LIMIT = 20;
   const NOTIFICATION_HISTORY_PAGE_SIZE = 10;
   const ADMIN_NOTIFICATION_OVERVIEW_LIMIT = 100;
@@ -2613,6 +2620,21 @@
     return `Payout complete: ${parts.join(" · ")}.`;
   }
 
+  function getExpectedOutcomeTimelineStep(market, { active = false } = {}) {
+    const configuration = getExpectedOutcomeConfiguration(market);
+    if (!configuration) return null;
+    const hasPassed = isExpectedOutcomePast(market);
+    const relativeTiming = formatExpectedOutcomeRelative(market);
+    return {
+      state: hasPassed || active ? "current" : "pending",
+      title: hasPassed ? "Awaiting result" : "Outcome expected",
+      time: `${formatExpectedOutcome(market)}${relativeTiming ? ` · ${relativeTiming}` : ""}`,
+      detail: hasPassed
+        ? "Reality is running behind schedule. Committed points remain in administrative custody until someone makes the result official."
+        : "The universe should cough up an answer around this time. Until someone makes it official, committed points remain respectfully detained.",
+    };
+  }
+
   function renderMarketTimeline(market) {
     const openedAt = formatTimelineMoment(market.created_at, "Opening time not recorded");
     const closeMode = market.closeMode || market.close_mode || "date";
@@ -2718,6 +2740,7 @@
       summary = getResolvedSettlementSummary(market);
       summaryClass = " is-complete";
     } else if (closeMode === "outcome") {
+      const expectedOutcomeStep = getExpectedOutcomeTimelineStep(market);
       subtitle = "Predictions stay open until someone makes the result official. Hindsight still doesn’t count.";
       steps = [
         openedStep,
@@ -2728,18 +2751,21 @@
           detail:
             "At resolution, the time the outcome became known is recorded. Predictions made from that point on don’t count and are refunded.",
         },
+        ...(expectedOutcomeStep ? [expectedOutcomeStep] : []),
         {
           state: "pending",
           title: "Result & payout",
           time: "When the market is resolved",
           detail:
-            "The pool is paid out to the winners right away. Points from late predictions are refunded at the same time.",
+            "Once the result is entered into the record, the pool goes to the winners. Predictions placed after the answer got out are refunded—hindsight remains ineligible.",
         },
       ];
-      summary =
-        "You can add more points—or quietly back another outcome—but committed points can’t be withdrawn.";
+      summary = expectedOutcomeStep
+        ? null
+        : "You can add more points—or quietly back another outcome—but committed points can’t be withdrawn.";
     } else {
       const tradingClosed = displayStatus === "closed";
+      const expectedOutcomeStep = getExpectedOutcomeTimelineStep(market, { active: tradingClosed });
       const scheduledClose = formatTimelineMoment(
         market.closes_at,
         "Scheduled close not recorded",
@@ -2756,17 +2782,20 @@
           detail:
             "Predictions close at this time unless the outcome is known sooner. If that happens, only earlier predictions count.",
         },
+        ...(expectedOutcomeStep ? [expectedOutcomeStep] : []),
         {
-          state: tradingClosed ? "current" : "pending",
+          state: tradingClosed && !expectedOutcomeStep ? "current" : "pending",
           title: "Result & payout",
           time: "When the market is resolved",
           detail:
-            "The result and the time it became known are recorded. Then the pool is paid out to the winners, and points from late predictions are refunded.",
+            "Once the result is entered into the record, the pool goes to the winners. Predictions placed after the answer got out are refunded—hindsight remains ineligible.",
         },
       ];
-      summary = tradingClosed
-        ? "Committed points stay put until the result is made official."
-        : "You can add more points—or quietly back another outcome—but committed points can’t be withdrawn.";
+      summary = expectedOutcomeStep
+        ? null
+        : tradingClosed
+          ? "Committed points stay put until the result is made official."
+          : "You can add more points—or quietly back another outcome—but committed points can’t be withdrawn.";
     }
 
     return `
@@ -2780,7 +2809,7 @@
         <ol class="market-timeline-list">
           ${steps.map(renderMarketTimelineStep).join("")}
         </ol>
-        <p class="market-timeline-summary${summaryClass}">${escapeHtml(summary)}</p>
+        ${summary ? `<p class="market-timeline-summary${summaryClass}">${escapeHtml(summary)}</p>` : ""}
       </section>
     `;
   }
@@ -3902,6 +3931,7 @@
 
   function getMarketHeroMeta(market) {
     const points = formatNumber(market.actualTotal);
+    const expectationLabel = formatExpectedOutcomeHeroLabel(market);
 
     if (market.status === "void") {
       return {
@@ -3918,9 +3948,17 @@
       };
     }
 
-    if (market.displayStatus === "closed") {
+    if (market.status === "open" && isExpectedOutcomePast(market)) {
       return {
         stateLabel: "Awaiting result",
+        pointsLabel: `${points} points in pool`,
+      };
+    }
+
+    if (market.displayStatus === "closed") {
+      return {
+        stateLabel: expectationLabel ? "Predictions closed" : "Awaiting result",
+        expectationLabel,
         pointsLabel: `${points} points in pool`,
       };
     }
@@ -3931,6 +3969,7 @@
         : market.closes_at
           ? `Closes ${formatDateTime(market.closes_at)}`
           : "Close time not recorded",
+      expectationLabel,
       pointsLabel: `${points} points in pool`,
     };
   }
@@ -3958,6 +3997,7 @@
     const isCreator = market.creator_id === state.user.id;
     const canManage = isCreator || state.profile.is_admin;
     const canEdit = state.profile.is_admin && market.status === "open";
+    const canEditExpectation = canManage && market.status === "open";
     const canDelete = state.profile.is_admin && market.status === "void" && market.predictions.length === 0;
     const canArchive =
       state.profile.is_admin &&
@@ -3969,7 +4009,7 @@
     const canResolve = canManage && market.status === "open";
     const canVoid = canManage && market.status === "open";
     const hasMarketControls =
-      canEdit || canResolve || canVoid || canArchive || canRestore || canDelete;
+      canEdit || canEditExpectation || canResolve || canVoid || canArchive || canRestore || canDelete;
     const storedSelectedOutcomeId = state.selectedOutcomeByMarket.get(market.id);
     const selectedOutcome = canPredict
       ? market.outcomes.find((outcome) => outcome.id === storedSelectedOutcomeId)
@@ -4015,6 +4055,7 @@
             <div class="market-meta-row">
               <span class="tiny-pill">Created by ${escapeHtml(market.creator?.display_name || "Unknown")}</span>
               <span class="tiny-pill">${escapeHtml(heroMeta.stateLabel)}</span>
+              ${heroMeta.expectationLabel ? `<span class="tiny-pill">${escapeHtml(heroMeta.expectationLabel)}</span>` : ""}
               <span class="tiny-pill">${escapeHtml(heroMeta.pointsLabel)}</span>
             </div>
           </section>
@@ -4152,6 +4193,7 @@
                   <p class="eyebrow sidebar-actions-label">Manage market</p>
                   <div class="sidebar-management-grid">
                     ${canEdit ? '<button class="button button-secondary" id="edit-market" type="button">Edit market</button>' : ""}
+                    ${canEditExpectation && !canEdit ? `<button class="button button-secondary" id="edit-expected-outcome" type="button">${getExpectedOutcomeConfiguration(market) ? "Edit expected timing" : "Add expected timing"}</button>` : ""}
                     ${canVoid ? '<button class="button button-danger" id="void-market" type="button">Void &amp; refund</button>' : ""}
                     ${canResolve ? '<button class="button button-secondary button-wide" id="resolve-market" type="button">Resolve market</button>' : ""}
                     ${canArchive ? '<button class="button button-secondary button-wide" id="archive-void-market" type="button">Archive voided market</button>' : ""}
@@ -4200,6 +4242,7 @@
     });
 
     document.querySelector("#edit-market")?.addEventListener("click", () => openEditMarketModal(market));
+    document.querySelector("#edit-expected-outcome")?.addEventListener("click", () => openExpectedOutcomeModal(market));
     document.querySelector("#resolve-market")?.addEventListener("click", () => openResolveModal(market));
     document.querySelector("#void-market")?.addEventListener("click", () => openVoidModal(market));
     document.querySelector("#archive-void-market")?.addEventListener("click", () => openArchiveVoidMarketModal(market, true));
@@ -4399,8 +4442,402 @@
     `;
   }
 
+  function getDetectedTimeZone() {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    } catch {
+      return "UTC";
+    }
+  }
+
+  function parseExpectedOutcomeDate(value) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ""));
+    if (!match) return null;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const check = new Date(Date.UTC(year, month - 1, day));
+    if (
+      check.getUTCFullYear() !== year ||
+      check.getUTCMonth() !== month - 1 ||
+      check.getUTCDate() !== day
+    ) return null;
+    return { year, month, day };
+  }
+
+  function shiftExpectedOutcomeDate(value, days) {
+    const parts = parseExpectedOutcomeDate(value);
+    if (!parts) return null;
+    return new Date(Date.UTC(parts.year, parts.month - 1, parts.day + days))
+      .toISOString()
+      .slice(0, 10);
+  }
+
+  function getTimeZoneOffset(timestamp, timeZone) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(new Date(timestamp));
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    const representedAsUtc = Date.UTC(
+      Number(values.year),
+      Number(values.month) - 1,
+      Number(values.day),
+      Number(values.hour),
+      Number(values.minute),
+      Number(values.second),
+    );
+    return representedAsUtc - timestamp;
+  }
+
+  function zonedDateTimeToTimestamp(dateValue, timeValue, timeZone) {
+    const dateParts = parseExpectedOutcomeDate(dateValue);
+    const timeMatch = /^(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(String(timeValue || ""));
+    if (!dateParts || !timeMatch) return NaN;
+    const hour = Number(timeMatch[1]);
+    const minute = Number(timeMatch[2]);
+    const second = Number(timeMatch[3] || 0);
+    if (hour > 23 || minute > 59 || second > 59) return NaN;
+
+    const utcGuess = Date.UTC(
+      dateParts.year,
+      dateParts.month - 1,
+      dateParts.day,
+      hour,
+      minute,
+      second,
+    );
+
+    try {
+      let timestamp = utcGuess - getTimeZoneOffset(utcGuess, timeZone);
+      timestamp = utcGuess - getTimeZoneOffset(timestamp, timeZone);
+      return timestamp;
+    } catch {
+      return new Date(`${dateValue}T${timeMatch[1]}:${timeMatch[2]}:${String(second).padStart(2, "0")}`).getTime();
+    }
+  }
+
+  function getExpectedOutcomeConfiguration(source = {}) {
+    const date = String(source.expected_outcome_date || "");
+    const timing = String(source.expected_outcome_timing || "").toLowerCase();
+    const time = source.expected_outcome_time
+      ? String(source.expected_outcome_time).slice(0, 5)
+      : null;
+    const timeZone = String(source.expected_outcome_timezone || "");
+    if (
+      !parseExpectedOutcomeDate(date) ||
+      !EXPECTED_OUTCOME_TIMINGS.has(timing) ||
+      !timeZone ||
+      (timing === "specific" && !/^\d{2}:\d{2}$/.test(time || ""))
+    ) return null;
+    return { date, timing, time: timing === "specific" ? time : null, timeZone };
+  }
+
+  function getExpectedOutcomeEndTimestamp(source) {
+    const configuration = getExpectedOutcomeConfiguration(source);
+    if (!configuration) return NaN;
+    const { date, timing, time, timeZone } = configuration;
+    if (timing === "specific") {
+      return zonedDateTimeToTimestamp(date, time, timeZone);
+    }
+    if (timing === "morning") {
+      return zonedDateTimeToTimestamp(date, "12:00", timeZone);
+    }
+    if (timing === "afternoon") {
+      return zonedDateTimeToTimestamp(date, "17:00", timeZone);
+    }
+    return zonedDateTimeToTimestamp(shiftExpectedOutcomeDate(date, 1), "00:00", timeZone);
+  }
+
+  function isExpectedOutcomePast(source, now = Date.now()) {
+    const endTimestamp = getExpectedOutcomeEndTimestamp(source);
+    return Number.isFinite(endTimestamp) && endTimestamp <= now;
+  }
+
+  function formatExpectedCalendarDate(value) {
+    const parts = parseExpectedOutcomeDate(value);
+    if (!parts) return "Date not set";
+    const date = new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
+    return new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric",
+      year: parts.year !== new Date().getFullYear() ? "numeric" : undefined,
+      timeZone: "UTC",
+    }).format(date);
+  }
+
+  function formatExpectedOutcome(source, { preserveTimeZone = false } = {}) {
+    const configuration = getExpectedOutcomeConfiguration(source);
+    if (!configuration) return "Expected date not set";
+    const { date, timing, time, timeZone } = configuration;
+    if (timing === "specific") {
+      if (preserveTimeZone) {
+        const [hour, minute] = time.split(":").map(Number);
+        const timeText = new Intl.DateTimeFormat("en-US", {
+          hour: "numeric",
+          minute: "2-digit",
+          timeZone: "UTC",
+        }).format(new Date(Date.UTC(2000, 0, 1, hour, minute)));
+        return `Expected ${formatExpectedCalendarDate(date)} at ${timeText}`;
+      }
+      const timestamp = zonedDateTimeToTimestamp(date, time, timeZone);
+      if (!Number.isFinite(timestamp)) return "Expected date not set";
+      const instant = new Date(timestamp);
+      const dateText = new Intl.DateTimeFormat("en-US", {
+        month: "short",
+        day: "numeric",
+        year: instant.getFullYear() !== new Date().getFullYear() ? "numeric" : undefined,
+      }).format(instant);
+      const timeText = new Intl.DateTimeFormat("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(instant);
+      return `Expected ${dateText} at ${timeText}`;
+    }
+
+    const dateText = formatExpectedCalendarDate(date);
+    if (timing === "date") return `Expected ${dateText}`;
+    return `Expected the ${timing} of ${dateText}`;
+  }
+
+  function formatExpectedOutcomeRelative(source, now = Date.now()) {
+    const configuration = getExpectedOutcomeConfiguration(source);
+    if (!configuration || isExpectedOutcomePast(source, now)) return null;
+
+    if (configuration.timing === "specific") {
+      const target = getExpectedOutcomeEndTimestamp(source);
+      const difference = target - now;
+      if (difference < 60 * 60 * 1000) return "less than an hour away";
+      if (difference < 36 * 60 * 60 * 1000) {
+        const hours = Math.max(1, Math.round(difference / (60 * 60 * 1000)));
+        return `about ${hours} ${pluralize(hours, "hour")} away`;
+      }
+      const days = Math.max(1, Math.round(difference / (24 * 60 * 60 * 1000)));
+      return `about ${days} ${pluralize(days, "day")} away`;
+    }
+
+    const currentParts = new Intl.DateTimeFormat("en-US", {
+      timeZone: configuration.timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date(now));
+    const currentValues = Object.fromEntries(
+      currentParts.map((part) => [part.type, part.value]),
+    );
+    const expectedParts = parseExpectedOutcomeDate(configuration.date);
+    const currentDateNumber = Date.UTC(
+      Number(currentValues.year),
+      Number(currentValues.month) - 1,
+      Number(currentValues.day),
+    );
+    const expectedDateNumber = Date.UTC(
+      expectedParts.year,
+      expectedParts.month - 1,
+      expectedParts.day,
+    );
+    const days = Math.round(
+      (expectedDateNumber - currentDateNumber) / (24 * 60 * 60 * 1000),
+    );
+    if (days > 1) return `${days} days away`;
+    if (days === 1) {
+      return configuration.timing === "date"
+        ? "tomorrow"
+        : `tomorrow ${configuration.timing}`;
+    }
+    return configuration.timing === "date"
+      ? "today"
+      : `this ${configuration.timing}`;
+  }
+
+  function formatExpectedOutcomeHeroLabel(source) {
+    const relativeTiming = formatExpectedOutcomeRelative(source);
+    if (!relativeTiming) return null;
+    return relativeTiming.endsWith(" away")
+      ? `Outcome expected in ${relativeTiming.slice(0, -5)}`
+      : `Outcome expected ${relativeTiming}`;
+  }
+
+  function getExpectedOutcomeTimeZoneLabel(source) {
+    const configuration = getExpectedOutcomeConfiguration(source);
+    if (!configuration) return "Local time";
+    const timestamp = zonedDateTimeToTimestamp(configuration.date, "12:00", configuration.timeZone);
+    try {
+      return new Intl.DateTimeFormat("en-US", {
+        timeZone: configuration.timeZone,
+        timeZoneName: "longGeneric",
+      }).formatToParts(new Date(timestamp))
+        .find((part) => part.type === "timeZoneName")?.value || configuration.timeZone;
+    } catch {
+      return configuration.timeZone;
+    }
+  }
+
+  function toLocalDateInput(date) {
+    const offset = date.getTimezoneOffset();
+    return new Date(date.getTime() - offset * 60 * 1000).toISOString().slice(0, 10);
+  }
+
+  function renderExpectedOutcomeEditor({
+    idPrefix,
+    enabled = false,
+    dateValue,
+    timing = "date",
+    timeValue = "20:00",
+    timeZone = getDetectedTimeZone(),
+    minimumDate = toLocalDateInput(new Date()),
+  }) {
+    const draft = {
+      expected_outcome_date: dateValue,
+      expected_outcome_timing: timing,
+      expected_outcome_time: timeValue,
+      expected_outcome_timezone: timeZone,
+    };
+    return `
+      <div class="expected-outcome-editor form-field-full">
+        <label class="expected-outcome-toggle" for="${idPrefix}-expected-outcome-enabled">
+          <input
+            id="${idPrefix}-expected-outcome-enabled"
+            name="hasExpectedOutcome"
+            type="checkbox"
+            aria-controls="${idPrefix}-expected-outcome-fields"
+            ${enabled ? "checked" : ""}
+          />
+          <span>
+            <strong>This market has an expected outcome date</strong>
+            <small>Give traders an idea of how long their points may be committed.</small>
+          </span>
+        </label>
+        <div id="${idPrefix}-expected-outcome-fields" class="expected-outcome-fields${enabled ? "" : " hidden"}">
+          <div class="form-grid">
+            <div class="form-field">
+              <label for="${idPrefix}-expected-outcome-date">Date</label>
+              <input
+                id="${idPrefix}-expected-outcome-date"
+                name="expectedOutcomeDate"
+                type="date"
+                min="${escapeAttribute(minimumDate)}"
+                value="${escapeAttribute(dateValue)}"
+              />
+            </div>
+            <div class="form-field">
+              <label for="${idPrefix}-expected-outcome-timing">Timing</label>
+              <select id="${idPrefix}-expected-outcome-timing" name="expectedOutcomeTiming">
+                <option value="specific"${timing === "specific" ? " selected" : ""}>Specific time</option>
+                <option value="morning"${timing === "morning" ? " selected" : ""}>Morning</option>
+                <option value="afternoon"${timing === "afternoon" ? " selected" : ""}>Afternoon</option>
+                <option value="evening"${timing === "evening" ? " selected" : ""}>Evening</option>
+                <option value="date"${timing === "date" ? " selected" : ""}>Sometime that day</option>
+              </select>
+            </div>
+            <div class="form-field${timing === "specific" ? "" : " hidden"}" id="${idPrefix}-expected-outcome-time-field">
+              <label for="${idPrefix}-expected-outcome-time">Time</label>
+              <input
+                id="${idPrefix}-expected-outcome-time"
+                name="expectedOutcomeTime"
+                type="time"
+                value="${escapeAttribute(timeValue)}"
+                ${timing === "specific" ? "" : "disabled"}
+              />
+            </div>
+          </div>
+          <div class="expected-outcome-preview" aria-live="polite">
+            <span>What traders will see</span>
+            <strong id="${idPrefix}-expected-outcome-preview">${escapeHtml(formatExpectedOutcome(draft, { preserveTimeZone: true }))}</strong>
+            <small>Times use ${escapeHtml(getExpectedOutcomeTimeZoneLabel(draft))}. This estimate does not close or resolve the market. The result must still be confirmed manually.</small>
+          </div>
+          <p id="${idPrefix}-expected-outcome-warning" class="expected-outcome-warning hidden"></p>
+        </div>
+      </div>
+    `;
+  }
+
+  function bindExpectedOutcomeEditor(idPrefix, { timeZone, getScheduledClose = null } = {}) {
+    const toggle = document.querySelector(`#${idPrefix}-expected-outcome-enabled`);
+    const fields = document.querySelector(`#${idPrefix}-expected-outcome-fields`);
+    const dateInput = document.querySelector(`#${idPrefix}-expected-outcome-date`);
+    const timingInput = document.querySelector(`#${idPrefix}-expected-outcome-timing`);
+    const timeField = document.querySelector(`#${idPrefix}-expected-outcome-time-field`);
+    const timeInput = document.querySelector(`#${idPrefix}-expected-outcome-time`);
+    const preview = document.querySelector(`#${idPrefix}-expected-outcome-preview`);
+    const warning = document.querySelector(`#${idPrefix}-expected-outcome-warning`);
+    const resolvedTimeZone = timeZone || getDetectedTimeZone();
+
+    const getDraft = () => ({
+      expected_outcome_date: dateInput?.value || "",
+      expected_outcome_timing: timingInput?.value || "date",
+      expected_outcome_time: timeInput?.value || null,
+      expected_outcome_timezone: resolvedTimeZone,
+    });
+
+    const update = () => {
+      const enabled = Boolean(toggle?.checked);
+      const usesSpecificTime = timingInput?.value === "specific";
+      toggle?.setAttribute("aria-expanded", String(enabled));
+      fields?.classList.toggle("hidden", !enabled);
+      timeField?.classList.toggle("hidden", !usesSpecificTime);
+      if (dateInput) dateInput.required = enabled;
+      if (timingInput) timingInput.required = enabled;
+      if (timeInput) {
+        timeInput.required = enabled && usesSpecificTime;
+        timeInput.disabled = !enabled || !usesSpecificTime;
+      }
+
+      const draft = getDraft();
+      if (preview) preview.textContent = formatExpectedOutcome(draft, { preserveTimeZone: true });
+      if (!warning) return;
+
+      const expectedEnd = getExpectedOutcomeEndTimestamp(draft);
+      const scheduledClose = getScheduledClose?.();
+      const closesAfterExpectation =
+        enabled &&
+        Number.isFinite(expectedEnd) &&
+        Number.isFinite(scheduledClose) &&
+        expectedEnd < scheduledClose;
+      warning.classList.toggle("hidden", !closesAfterExpectation);
+      warning.textContent = closesAfterExpectation
+        ? "The outcome is expected before predictions close. Later predictions may be refunded if the result becomes known early."
+        : "";
+    };
+
+    [toggle, dateInput, timingInput, timeInput].forEach((input) => {
+      input?.addEventListener("change", update);
+      if (input === dateInput || input === timeInput) input?.addEventListener("input", update);
+    });
+    update();
+    return { getDraft, update };
+  }
+
+  function readExpectedOutcomeForm(form, timeZone) {
+    if (form.get("hasExpectedOutcome") !== "on") {
+      return {
+        expected_outcome_date: null,
+        expected_outcome_timing: null,
+        expected_outcome_time: null,
+        expected_outcome_timezone: null,
+      };
+    }
+    const timing = String(form.get("expectedOutcomeTiming") || "date");
+    return {
+      expected_outcome_date: String(form.get("expectedOutcomeDate") || ""),
+      expected_outcome_timing: timing,
+      expected_outcome_time: timing === "specific"
+        ? String(form.get("expectedOutcomeTime") || "")
+        : null,
+      expected_outcome_timezone: timeZone || getDetectedTimeZone(),
+    };
+  }
+
   function renderCreateMarket() {
     const defaultClose = toLocalDateTimeInput(new Date(Date.now() + 24 * 60 * 60 * 1000));
+    const defaultExpectedDate = toLocalDateInput(new Date(Date.now() + 24 * 60 * 60 * 1000));
+    const detectedTimeZone = getDetectedTimeZone();
 
     dom.main.innerHTML = `
       <div class="page-header">
@@ -4451,8 +4888,8 @@
           <div class="form-section-heading">
             <span class="form-number">03</span>
             <div>
-              <h2>Choose the closing rule</h2>
-              <p>Close predictions at a set time, or keep them open until someone makes the result official.</p>
+              <h2>Set the timeline</h2>
+              <p>Choose when predictions stop and, if known, when the outcome should become available.</p>
             </div>
           </div>
           <div class="close-mode-options" role="radiogroup" aria-label="When predictions close">
@@ -4483,6 +4920,11 @@
               </div>
             </div>
           </div>
+          ${renderExpectedOutcomeEditor({
+            idPrefix: "market",
+            dateValue: defaultExpectedDate,
+            timeZone: detectedTimeZone,
+          })}
         </section>
 
         <footer class="form-footer">
@@ -4547,6 +4989,17 @@
     closeModeInputs.forEach((input) => input.addEventListener("change", updateCloseMode));
     updateCloseMode();
 
+    const expectedOutcomeEditor = bindExpectedOutcomeEditor("market", {
+      timeZone: detectedTimeZone,
+      getScheduledClose: () => {
+        const usesDate = closeModeInputs.find((input) => input.checked)?.value === "date";
+        if (!usesDate) return NaN;
+        return new Date(scheduledCloseInput?.value || "").getTime();
+      },
+    });
+    closeModeInputs.forEach((input) => input.addEventListener("change", expectedOutcomeEditor.update));
+    scheduledCloseInput?.addEventListener("input", expectedOutcomeEditor.update);
+
     document.querySelector("#add-choice").addEventListener("click", () => {
       if (choices.length >= MAX_MARKET_OUTCOMES) return;
       choices.push("");
@@ -4561,6 +5014,7 @@
       const description = String(form.get("description") || "").trim();
       const closeMode = String(form.get("closeMode") || "date");
       const closesAtRaw = String(form.get("closesAt") || "");
+      const expectedOutcome = readExpectedOutcomeForm(form, detectedTimeZone);
       const outcomeLabels = choices.map((choice) => choice.trim()).filter(Boolean);
       const normalized = outcomeLabels.map((label) => label.toLocaleLowerCase());
       const submit = event.currentTarget.querySelector("button[type='submit']");
@@ -4589,6 +5043,17 @@
         return;
       }
 
+      if (expectedOutcome.expected_outcome_date) {
+        if (!getExpectedOutcomeConfiguration(expectedOutcome)) {
+          showToast("Complete the expected outcome date and timing.", "error");
+          return;
+        }
+        if (getExpectedOutcomeEndTimestamp(expectedOutcome) <= Date.now()) {
+          showToast("Choose an expected outcome that is still in the future.", "error");
+          return;
+        }
+      }
+
       setButtonLoading(submit, true, "Opening market…");
 
       const { data, error } = await state.client.rpc("create_market", {
@@ -4596,6 +5061,10 @@
         p_description: description || null,
         p_close_mode: closeMode,
         p_closes_at: closesAt ? closesAt.toISOString() : null,
+        p_expected_outcome_date: expectedOutcome.expected_outcome_date,
+        p_expected_outcome_timing: expectedOutcome.expected_outcome_timing,
+        p_expected_outcome_time: expectedOutcome.expected_outcome_time,
+        p_expected_outcome_timezone: expectedOutcome.expected_outcome_timezone,
         p_outcome_labels: outcomeLabels,
       });
 
@@ -7278,9 +7747,117 @@
     });
   }
 
+  function openExpectedOutcomeModal(market) {
+    const canManage =
+      market.status === "open" &&
+      (market.creator_id === state.user?.id || state.profile?.is_admin);
+    if (!canManage) return;
+
+    const existing = getExpectedOutcomeConfiguration(market);
+    const defaultDate = toLocalDateInput(new Date(Date.now() + 24 * 60 * 60 * 1000));
+    const dateValue = existing?.date || defaultDate;
+    const timeZone = existing?.timeZone || getDetectedTimeZone();
+    const minimumDate = existing?.date && existing.date < toLocalDateInput(new Date())
+      ? existing.date
+      : toLocalDateInput(new Date());
+
+    openModal(`
+      <div class="modal-header">
+        <div>
+          <p class="eyebrow">Market timeline</p>
+          <h2>${existing ? "Edit expected timing." : "Add expected timing."}</h2>
+          <p>Help traders understand roughly how long their points may be committed.</p>
+        </div>
+        <button class="modal-close" data-modal-close type="button" aria-label="Close">×</button>
+      </div>
+      <form id="expected-outcome-form">
+        <div class="modal-body">
+          ${renderExpectedOutcomeEditor({
+            idPrefix: "edit",
+            enabled: Boolean(existing),
+            dateValue,
+            timing: existing?.timing || "date",
+            timeValue: existing?.time || "20:00",
+            timeZone,
+            minimumDate,
+          })}
+        </div>
+        <div class="modal-footer">
+          <button class="button button-secondary" data-modal-close type="button">Cancel</button>
+          <button class="button button-primary" type="submit">Save expected timing</button>
+        </div>
+      </form>
+    `, "expected-outcome-modal");
+
+    bindExpectedOutcomeEditor("edit", {
+      timeZone,
+      getScheduledClose: () => market.closeMode === "date" || market.close_mode === "date"
+        ? getTimestamp(market.closes_at, NaN)
+        : NaN,
+    });
+
+    document.querySelector("#expected-outcome-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const expectedOutcome = readExpectedOutcomeForm(form, timeZone);
+      const button = event.currentTarget.querySelector("button[type='submit']");
+
+      if (expectedOutcome.expected_outcome_date) {
+        const nextConfiguration = getExpectedOutcomeConfiguration(expectedOutcome);
+        if (!nextConfiguration) {
+          showToast("Complete the expected outcome date and timing.", "error");
+          return;
+        }
+        const unchanged = Boolean(
+          existing &&
+          existing.date === nextConfiguration.date &&
+          existing.timing === nextConfiguration.timing &&
+          existing.time === nextConfiguration.time &&
+          existing.timeZone === nextConfiguration.timeZone
+        );
+        if (!unchanged && getExpectedOutcomeEndTimestamp(expectedOutcome) <= Date.now()) {
+          showToast("Choose an expected outcome that is still in the future.", "error");
+          return;
+        }
+      }
+
+      setButtonLoading(button, true, "Saving timing…");
+      const { error } = await state.client.rpc("set_market_expected_outcome", {
+        p_market_id: market.id,
+        p_expected_outcome_date: expectedOutcome.expected_outcome_date,
+        p_expected_outcome_timing: expectedOutcome.expected_outcome_timing,
+        p_expected_outcome_time: expectedOutcome.expected_outcome_time,
+        p_expected_outcome_timezone: expectedOutcome.expected_outcome_timezone,
+      });
+      setButtonLoading(button, false);
+
+      if (error) {
+        showToast(error.message, "error");
+        return;
+      }
+
+      closeModal();
+      await refreshData({ quiet: true });
+      showToast(
+        expectedOutcome.expected_outcome_date
+          ? "Expected outcome timing saved."
+          : "Expected outcome timing removed.",
+        "success",
+      );
+    });
+  }
+
   function openEditMarketModal(market) {
     if (!state.profile?.is_admin || market.status !== "open") return;
     const currentCloseMode = market.closeMode || market.close_mode || "date";
+    const existingExpectation = getExpectedOutcomeConfiguration(market);
+    const expectedTimeZone = existingExpectation?.timeZone || getDetectedTimeZone();
+    const defaultExpectedDate = toLocalDateInput(new Date(Date.now() + 24 * 60 * 60 * 1000));
+    const expectedDateValue = existingExpectation?.date || defaultExpectedDate;
+    const minimumExpectedDate =
+      existingExpectation?.date && existingExpectation.date < toLocalDateInput(new Date())
+        ? existingExpectation.date
+        : toLocalDateInput(new Date());
     const editableOutcomes = [
       ...(Array.isArray(market.outcomes)
         ? market.outcomes
@@ -7301,8 +7878,13 @@
       </div>
       <form id="edit-market-form">
         <div class="modal-body">
-          <div class="form-grid">
-            <div class="form-field form-field-full">
+          <section class="edit-market-section" aria-labelledby="edit-market-details-heading">
+            <div class="edit-market-section-heading">
+              <p class="eyebrow">Market details</p>
+              <h3 id="edit-market-details-heading">Correct the public record.</h3>
+            </div>
+            <div class="form-grid">
+              <div class="form-field form-field-full">
               <label for="edit-market-question">Question</label>
               <input
                 id="edit-market-question"
@@ -7314,7 +7896,7 @@
                 required
               />
             </div>
-            <div class="form-field form-field-full">
+              <div class="form-field form-field-full">
               <label for="edit-market-description">Details <span class="muted">(optional)</span></label>
               <textarea
                 id="edit-market-description"
@@ -7326,7 +7908,7 @@
                 <output id="edit-market-description-count" class="character-counter" for="edit-market-description" aria-label="Description character count">0 / 600</output>
               </div>
             </div>
-            <div class="form-field form-field-full">
+              <div class="form-field form-field-full">
               <span class="field-label">Outcome names</span>
               <div class="edit-market-outcomes" aria-describedby="edit-market-outcomes-help">
                 ${editableOutcomes.map((outcome, index) => `
@@ -7346,28 +7928,47 @@
               </div>
               <small id="edit-market-outcomes-help">Correct the labels only. Outcomes cannot be added, removed, or reordered.</small>
             </div>
-            <div class="form-field form-field-full">
-              <label for="edit-market-close-mode">Closing rule</label>
-              <select id="edit-market-close-mode" name="closeMode">
-                <option value="date"${currentCloseMode === "date" ? " selected" : ""}>Open until date</option>
-                <option value="outcome"${currentCloseMode === "outcome" ? " selected" : ""}>Open until outcome</option>
-              </select>
-              <small>Changing a closed market to open until outcome reopens it immediately.</small>
             </div>
-            <div class="form-field form-field-full${currentCloseMode === "outcome" ? " hidden" : ""}" id="edit-scheduled-close-field">
-              <label for="edit-market-closes">Predictions close</label>
-              <input
-                id="edit-market-closes"
-                name="closesAt"
-                type="datetime-local"
-                value="${editCloseValue}"
-                ${currentCloseMode === "date" ? "required" : "disabled"}
-              />
-              <small>The corrected closing time must still be in the future.</small>
+          </section>
+
+          <section class="edit-market-section" aria-labelledby="edit-market-timeline-heading">
+            <div class="edit-market-section-heading">
+              <p class="eyebrow">Timeline</p>
+              <h3 id="edit-market-timeline-heading">Set the market’s clocks.</h3>
             </div>
-          </div>
+            <div class="form-grid">
+              <div class="form-field form-field-full">
+                <label for="edit-market-close-mode">Closing rule</label>
+                <select id="edit-market-close-mode" name="closeMode">
+                  <option value="date"${currentCloseMode === "date" ? " selected" : ""}>Open until date</option>
+                  <option value="outcome"${currentCloseMode === "outcome" ? " selected" : ""}>Open until outcome</option>
+                </select>
+                <small>Changing a closed market to open until outcome reopens it immediately.</small>
+              </div>
+              <div class="form-field form-field-full${currentCloseMode === "outcome" ? " hidden" : ""}" id="edit-scheduled-close-field">
+                <label for="edit-market-closes">Predictions close</label>
+                <input
+                  id="edit-market-closes"
+                  name="closesAt"
+                  type="datetime-local"
+                  value="${editCloseValue}"
+                  ${currentCloseMode === "date" ? "required" : "disabled"}
+                />
+                <small>The corrected closing time must still be in the future.</small>
+              </div>
+            </div>
+            ${renderExpectedOutcomeEditor({
+              idPrefix: "edit",
+              enabled: Boolean(existingExpectation),
+              dateValue: expectedDateValue,
+              timing: existingExpectation?.timing || "date",
+              timeValue: existingExpectation?.time || "20:00",
+              timeZone: expectedTimeZone,
+              minimumDate: minimumExpectedDate,
+            })}
+          </section>
           <p class="trade-warning">
-            This admin-only correction changes outcome names everywhere. Existing predictions stay attached to the same outcomes.
+            This admin-only correction can change market wording and timing. Existing positions and prediction history remain attached to the same outcomes.
           </p>
         </div>
         <div class="modal-footer">
@@ -7393,12 +7994,22 @@
     editCloseMode?.addEventListener("change", updateEditCloseMode);
     updateEditCloseMode();
 
+    const editExpectedOutcomeEditor = bindExpectedOutcomeEditor("edit", {
+      timeZone: expectedTimeZone,
+      getScheduledClose: () => editCloseMode?.value === "date"
+        ? new Date(editScheduledCloseInput?.value || "").getTime()
+        : NaN,
+    });
+    editCloseMode?.addEventListener("change", editExpectedOutcomeEditor.update);
+    editScheduledCloseInput?.addEventListener("input", editExpectedOutcomeEditor.update);
+
     document.querySelector("#edit-market-form").addEventListener("submit", async (event) => {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
       const question = String(form.get("question") || "").trim();
       const description = String(form.get("description") || "").trim();
       const closeMode = String(form.get("closeMode") || "date");
+      const expectedOutcome = readExpectedOutcomeForm(form, expectedTimeZone);
       const outcomeEdits = editableOutcomes.map((outcome) => ({
         id: outcome.id,
         label: String(form.get(`outcome-${outcome.id}`) || "").trim(),
@@ -7436,6 +8047,25 @@
         return;
       }
 
+      if (expectedOutcome.expected_outcome_date) {
+        const nextExpectation = getExpectedOutcomeConfiguration(expectedOutcome);
+        if (!nextExpectation) {
+          showToast("Complete the expected outcome date and timing.", "error");
+          return;
+        }
+        const expectationUnchanged = Boolean(
+          existingExpectation &&
+          existingExpectation.date === nextExpectation.date &&
+          existingExpectation.timing === nextExpectation.timing &&
+          existingExpectation.time === nextExpectation.time &&
+          existingExpectation.timeZone === nextExpectation.timeZone
+        );
+        if (!expectationUnchanged && getExpectedOutcomeEndTimestamp(expectedOutcome) <= Date.now()) {
+          showToast("Choose an expected outcome that is still in the future.", "error");
+          return;
+        }
+      }
+
       setButtonLoading(button, true, "Saving correction…");
       const { error } = await state.client.rpc("edit_market", {
         p_market_id: market.id,
@@ -7443,6 +8073,10 @@
         p_description: description || null,
         p_close_mode: closeMode,
         p_closes_at: closesAt ? closesAt.toISOString() : null,
+        p_expected_outcome_date: expectedOutcome.expected_outcome_date,
+        p_expected_outcome_timing: expectedOutcome.expected_outcome_timing,
+        p_expected_outcome_time: expectedOutcome.expected_outcome_time,
+        p_expected_outcome_timezone: expectedOutcome.expected_outcome_timezone,
         p_outcomes: outcomeEdits,
       });
       setButtonLoading(button, false);
