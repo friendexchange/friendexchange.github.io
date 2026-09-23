@@ -3614,6 +3614,29 @@ a.exchange-activity-item:focus-visible {
   font-size: 0.95rem;
 }
 
+.admin-section-heading {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+}
+
+.admin-section-heading > :last-child {
+  min-width: 0;
+}
+
+.admin-section-icon {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  background: var(--ink);
+  color: var(--mint);
+  font-size: 0.95rem;
+}
+
 .notification-mode-header {
   display: flex;
   align-items: flex-start;
@@ -5992,6 +6015,18 @@ a.exchange-activity-item:focus-visible {
   }
 
   .notification-section-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+  }
+
+  .admin-section-heading {
+    grid-template-columns: 40px minmax(0, 1fr);
+    align-items: start;
+    gap: 12px;
+  }
+
+  .admin-section-icon {
     width: 40px;
     height: 40px;
     border-radius: 12px;
