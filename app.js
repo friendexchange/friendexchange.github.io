@@ -6513,9 +6513,12 @@
       </section>
       <section class="table-card admin-market-card">
         <div class="admin-table-heading">
-          <div>
-            <h2>Market operations</h2>
-            <p>Actionable markets appear first. Dates are shown in your local time.</p>
+          <div class="admin-section-heading">
+            <span class="admin-section-icon"><i class="fa-solid fa-chart-line" aria-hidden="true"></i></span>
+            <div>
+              <h2>Market operations</h2>
+              <p>Actionable markets appear first. Dates are shown in your local time.</p>
+            </div>
           </div>
           <span class="admin-market-result-count">${escapeHtml(resultLabel)}</span>
         </div>
