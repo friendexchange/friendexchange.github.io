@@ -3758,7 +3758,7 @@
     const userPayouts = state.payouts.filter(
       (payout) => payout.market_id === market.id && payout.user_id === userId,
     );
-    const hasPersonalActivity = userCommitted > 0 || userPayouts.length > 0;
+    const hasPersonalActivity = userCommitted > 0;
     if (!hasPersonalActivity) return "";
 
     if (market.displayStatus === "closed") {
@@ -3774,9 +3774,6 @@
       const returned = userPayouts
         .filter((payout) => payout.kind !== "late_refund" && payout.kind !== "void_refund")
         .reduce((sum, payout) => sum + Number(payout.amount || 0), 0);
-      const lateRefund = userPayouts
-        .filter((payout) => payout.kind === "late_refund")
-        .reduce((sum, payout) => sum + Number(payout.amount || 0), 0);
       const profitLoss = returned - userCommitted;
       const profitLossClass = profitLoss > 0
         ? "text-success"
@@ -3789,12 +3786,10 @@
           <span>Returned to you</span>
           <strong>${formatNumber(returned)} pts</strong>
         </div>
-        ${lateRefund > 0 ? `
-          <div class="summary-row summary-row-personal-refund">
-            <span>Late points refunded</span>
-            <strong>${formatNumber(lateRefund)} pts</strong>
-          </div>
-        ` : ""}
+        <div class="summary-row summary-row-personal-multiple">
+          <span>Return multiple</span>
+          <strong>${formatReturnMultiple(returned, userCommitted)}</strong>
+        </div>
         <div class="summary-row summary-row-personal-profit-loss">
           <span>Profit / loss</span>
           <strong class="${profitLossClass}">${profitLoss > 0 ? "+" : ""}${formatNumber(profitLoss)} pts</strong>
@@ -3818,6 +3813,10 @@
           <span>Refunded to you</span>
           <strong>${formatNumber(refunded)} pts</strong>
         </div>
+        <div class="summary-row summary-row-personal-multiple">
+          <span>Return multiple</span>
+          <strong>${formatReturnMultiple(refunded, userCommitted)}</strong>
+        </div>
         <div class="summary-row summary-row-personal-net-change">
           <span>Net change</span>
           <strong class="${netChangeClass}">${netChange > 0 ? "+" : ""}${formatNumber(netChange)} pts</strong>
@@ -3826,6 +3825,62 @@
     }
 
     return "";
+  }
+
+  function formatReturnMultiple(returned, committed) {
+    const committedAmount = Number(committed) || 0;
+    if (committedAmount <= 0) return "—";
+    const multiple = (Number(returned) || 0) / committedAmount;
+    return `${multiple.toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1")}×`;
+  }
+
+  function getMarketStatementStatus(market) {
+    if (market.archived_at) return "Voided · archived";
+    if (market.displayStatus === "resolved") return "Resolved · settled";
+    if (market.displayStatus === "void") return "Voided · refunded";
+    if (market.displayStatus === "closed") return "Closed · awaiting result";
+    return "Trading · open";
+  }
+
+  function renderMarketStatementRow(label, value, valueClass = "") {
+    return `
+      <div class="summary-row">
+        <span>${escapeHtml(label)}</span>
+        <strong${valueClass ? ` class="${escapeAttribute(valueClass)}"` : ""}>${escapeHtml(value)}</strong>
+      </div>
+    `;
+  }
+
+  function renderMarketStatementTiming(market) {
+    const lines = [];
+
+    if (market.archived_at) {
+      lines.push(`Archived: ${formatDateTime(market.archived_at)}`);
+    } else if (market.displayStatus === "resolved") {
+      lines.push(market.resolved_at ? `Resolved: ${formatDateTime(market.resolved_at)}` : "Settlement complete");
+    } else if (market.displayStatus === "void") {
+      lines.push(market.resolved_at ? `Voided: ${formatDateTime(market.resolved_at)}` : "All points refunded");
+    } else if (market.displayStatus === "closed") {
+      lines.push(market.closes_at ? `Predictions closed: ${formatDateTime(market.closes_at)}` : "Awaiting the result");
+    } else if (market.closeMode === "outcome") {
+      lines.push("Closes: When the outcome is known");
+    } else {
+      lines.push(market.closes_at ? `Closes: ${formatDateTime(market.closes_at)}` : "Trading open");
+    }
+
+    const expectation = getExpectedOutcomeConfiguration(market);
+    if (["open", "closed"].includes(market.displayStatus) && expectation) {
+      const expectedWhen = ["morning", "afternoon", "evening"].includes(expectation.timing)
+        ? `${formatExpectedCalendarDate(expectation.date)}, ${expectation.timing}`
+        : formatExpectedOutcome(market).replace(/^Expected\s+/, "");
+      lines.push(`Outcome expected: ${expectedWhen}`);
+    }
+
+    return `
+      <div class="market-receipt-footer">
+        ${lines.map((line, index) => `<span${index > 0 ? ' class="market-receipt-expectation"' : ""}>${escapeHtml(line)}</span>`).join("")}
+      </div>
+    `;
   }
 
   function compareMarketActivityNewest(first, second) {
@@ -4169,31 +4224,30 @@
             </div>
 
             <div class="market-statement-ledger">
+              <div class="market-receipt-status">${escapeHtml(getMarketStatementStatus(market))}</div>
+
               <div class="stats-grid">
                 <div class="stat-card">
                   <strong>${formatNumber(market.actualTotal)}</strong>
-                  <span>${market.displayStatus === "resolved" ? "Final pool" : "Pool"}</span>
+                  <span>${market.displayStatus === "resolved" ? "Final pool" : market.displayStatus === "void" ? "Points refunded" : "Pool"}</span>
                 </div>
                 <div class="stat-card">
-                  <strong>${market.participants}</strong>
-                  <span>${market.displayStatus === "resolved" ? "Traders counted" : "Traders"}</span>
+                  <strong>${formatNumber(market.participants)}</strong>
+                  <span>Traders</span>
                 </div>
                 <div class="stat-card">
-                  <strong>${market.displayStatus === "resolved" ? formatNumber(market.lateTotal) : market.predictions.length}</strong>
-                  <span>${market.displayStatus === "resolved" ? "Late refunds" : "Predictions"}</span>
+                  <strong>${formatNumber(market.predictions.length)}</strong>
+                  <span>Predictions</span>
                 </div>
               </div>
 
               <div class="summary-stack">
                 <div class="summary-row">
-                  <span>Available balance</span>
-                  <strong>${formatNumber(state.profile.balance)} pts</strong>
-                </div>
-                <div class="summary-row">
                   <span>Committed to this market</span>
                   <strong>${formatNumber(userCommitted)} pts</strong>
                 </div>
                 ${renderMarketPersonalSettlement(market, state.user.id, userCommitted)}
+                ${renderMarketStatementTiming(market)}
               </div>
 
             </div>

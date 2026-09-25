@@ -2140,6 +2140,18 @@ a.exchange-activity-item:focus-visible {
   background: rgba(244, 242, 233, 0.34);
 }
 
+.market-receipt-status {
+  padding: 15px 20px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.63rem;
+  font-weight: 500;
+  letter-spacing: 0.13em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
 .market-statement-ledger .stats-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0;
@@ -2409,6 +2421,24 @@ a.exchange-activity-item:focus-visible {
 
 .market-statement-ledger .summary-row strong {
   font-size: 0.76rem;
+}
+
+.market-receipt-footer {
+  margin: 0;
+  padding: 15px 18px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.63rem;
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+
+.market-receipt-footer > span {
+  display: block;
+}
+
+.market-receipt-expectation {
+  margin-top: 5px;
 }
 
 .live-position {
